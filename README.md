@@ -1,14 +1,17 @@
 # Switchboard
 
-Your command center for Claude Code sessions.
+Your command center for Claude Code and Codex sessions.
 
-Switchboard is a desktop app that gives you a unified view of all your Claude Code sessions across every project. Launch, resume, fork, and monitor sessions from a single window — no more juggling terminal tabs or digging through `~/.claude/projects` to find that one conversation from last week.
+Switchboard is a desktop app that gives you a unified view of all your agent sessions across every project. Launch, resume, fork, and monitor sessions from a single window — no more juggling terminal tabs or digging through local history files to find that one conversation from last week.
+
+> This fork adds multi-provider support on top of the original Switchboard app, starting with **Claude Code** and **Codex**.
 
 ![Switchboard](build/screenshot.png)
 
 ### Key Features
 
-- **Session Browser** — All your Claude Code sessions, organized by project, searchable by content
+- **Session Browser** — All your agent sessions, organized by project, searchable by content
+- **Multi-Provider Launching** — Start new sessions with Claude Code or Codex from the same project sidebar
 - **Built-in Terminal** — Connect to running sessions or launch new ones without leaving the app
 - **Status Notifications** — In-app alerts when a session is waiting for permission approval or user input
 - **Fork & Resume** — Branch off from any point in a session's history
@@ -17,6 +20,42 @@ Switchboard is a desktop app that gives you a unified view of all your Claude Co
 - **Plans & Memory** — Browse and edit your plan files and CLAUDE.md memory in one place
 - **Activity Stats** — Heatmap of your coding activity across all projects
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
+
+## Codex Support
+
+This fork can launch and index Codex sessions alongside Claude Code sessions.
+
+### Requirements
+
+- Install and authenticate the `codex` CLI.
+- Keep Claude Code installed if you want to continue launching Claude sessions.
+
+### Launching Codex
+
+Use the `+` button on a project and choose:
+
+- **Codex** — launch with the saved/default Codex settings.
+- **Codex (Configure...)** — override launch settings for this session only.
+
+Supported Codex launch options:
+
+- model (`--model`)
+- profile (`--profile`)
+- sandbox (`--sandbox`)
+- approval policy (`--ask-for-approval`)
+- YOLO / dangerous mode (`--dangerously-bypass-approvals-and-sandbox`)
+- web search (`--search`)
+- no alternate screen (`--no-alt-screen`)
+- additional directories (`--add-dir`)
+- pre-launch command
+
+Codex session history is read from the local Codex state database and rollout files, then shown in the same sidebar/history views as Claude sessions.
+
+### Claude Per-Session API Key
+
+When launching Claude through **Claude (Configure...)**, you can optionally set an `ANTHROPIC_API_KEY` override for that session. Leaving the field empty keeps using the default environment/auth configuration.
+
+See [docs/multi-provider-codex-plan.md](docs/multi-provider-codex-plan.md) for implementation notes.
 
 ## Session Grid Overview
 
@@ -61,18 +100,29 @@ Switchboard monitors all your sessions in the background and shows status indica
 
 ## Download
 
-Grab the latest release for your platform:
+This fork does not currently publish packaged release artifacts. The original upstream DMG/installer does **not** include the Codex support from this fork.
 
-**[Download Switchboard](https://github.com/doctly/switchboard/releases/latest)**
+To try this fork today, run it from source:
 
-- **macOS**: `.dmg` (Apple Silicon & Intel)
-- **Windows**: `.exe` installer
-- **Linux**: `.AppImage` or `.deb`
+```bash
+npm install
+npm start
+```
+
+Or build a local package:
+
+```bash
+npm run build:mac
+```
+
+Upstream releases are available at [doctly/switchboard](https://github.com/doctly/switchboard/releases/latest) if you want the original Claude-only app.
 
 ## Prerequisites
 
 - **Node.js** 20+
 - **npm** 10+
+- **Claude Code CLI** for Claude sessions
+- **Codex CLI** for Codex sessions
 - Platform build tools for native modules:
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
   - **Linux**: `build-essential`, `python3` (`sudo apt install build-essential python3`)
@@ -151,6 +201,8 @@ The macOS build uses custom entitlements (`build/entitlements.mac.plist`) to all
 main.js            Electron main process
 preload.js         Context bridge (IPC bindings)
 db.js              SQLite session cache & metadata
+providers/         Provider-specific launch command builders
+codex-*.js         Codex session discovery and log adaptation
 public/            Renderer (HTML/CSS/JS)
 scripts/           Build & postinstall scripts
 build/             Icons, entitlements, builder resources
