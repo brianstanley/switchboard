@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
 const { Worker } = require('worker_threads');
+const { spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -25,10 +26,22 @@ const cleanPtyEnv = Object.fromEntries(
   )
 );
 
+function applySessionEnvOverrides(env, providerId, options = {}) {
+  if (providerId !== 'claude') return;
+  const anthropicApiKey = typeof options.anthropicApiKey === 'string'
+    ? options.anthropicApiKey.trim()
+    : '';
+  if (anthropicApiKey) {
+    env.ANTHROPIC_API_KEY = anthropicApiKey;
+  }
+}
+
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs } = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
+const { getProvider, getProviderMeta } = require('./providers');
+const { adaptCodexRollout } = require('./codex-log-adapter');
 
 
 
@@ -60,9 +73,9 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   });
 }
 const {
-  getMeta, getAllMeta, toggleStar, setName, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
-  deleteCachedSession, deleteCachedFolder,
+  getMeta, getAllMeta, toggleStar, setName, setArchived, deleteSessionMeta,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedSession, getCachedByProvider, upsertCachedSessions,
+  deleteCachedSession, deleteCachedFolder, deleteCachedProvider,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
@@ -260,13 +273,15 @@ sessionCache.init({
   getMainWindow: () => mainWindow,
   log,
   db: {
-    deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
+    deleteCachedFolder, getCachedByFolder, getCachedByProvider, upsertCachedSessions,
+    deleteCachedSession, deleteCachedProvider,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
     setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
   },
 });
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
-        buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
+        refreshCodexSessions, buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus,
+        populateCacheViaWorker } = sessionCache;
 
 
 // --- IPC: browse-folder ---
@@ -811,11 +826,18 @@ ipcMain.handle('delete-setting', (_event, key) => {
 const scheduleIpc = require('./schedule-ipc');
 
 const SETTING_DEFAULTS = {
+  defaultProvider: 'claude',
   permissionMode: null,
   dangerouslySkipPermissions: false,
   worktree: false,
   worktreeName: '',
   chrome: false,
+  codexModel: '',
+  codexProfile: '',
+  codexSandbox: '',
+  codexApprovalPolicy: '',
+  codexWebSearch: false,
+  codexNoAltScreen: true,
   preLaunchCmd: '',
   addDirs: '',
   visibleSessionCount: 5,
@@ -844,6 +866,8 @@ ipcMain.handle('get-effective-settings', (_event, projectPath) => {
   }
   return effective;
 });
+
+ipcMain.handle('get-provider-meta', () => getProviderMeta());
 
 // --- IPC: get-active-sessions ---
 ipcMain.handle('get-active-sessions', () => {
@@ -891,17 +915,23 @@ ipcMain.handle('rename-session', (_event, sessionId, name) => {
 
 // --- IPC: archive-session ---
 ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
-  const folder = getCachedFolder(sessionId);
-  if (!folder) return { error: 'Session not found in cache' };
-  const jsonlPath = path.join(PROJECTS_DIR, folder, sessionId + '.jsonl');
+  const cached = getCachedSession(sessionId);
+  if (!cached) return { error: 'Session not found in cache' };
+  const provider = cached.provider || 'claude';
+  const jsonlPath = provider === 'codex' && cached.filePath
+    ? cached.filePath
+    : path.join(PROJECTS_DIR, cached.folder, sessionId + '.jsonl');
   try {
     const content = fs.readFileSync(jsonlPath, 'utf-8');
+    if (provider === 'codex') {
+      return { entries: adaptCodexRollout(content), provider };
+    }
     const entries = [];
     for (const line of content.split('\n')) {
       if (!line.trim()) continue;
       try { entries.push(JSON.parse(line)); } catch {}
     }
-    return { entries };
+    return { entries, provider };
   } catch (err) {
     return { error: err.message };
   }
@@ -911,6 +941,46 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
   const val = archived ? 1 : 0;
   setArchived(sessionId, val);
   return { archived: val };
+});
+
+ipcMain.handle('delete-session', (_event, sessionId) => {
+  const cached = getCachedSession(sessionId);
+  const running = activeSessions.get(sessionId);
+
+  if (running && !running.exited) {
+    try { running.pty.kill(); } catch {}
+    running.exited = true;
+    activeSessions.delete(sessionId);
+  }
+
+  try {
+    if (cached) {
+      const provider = cached.provider || 'claude';
+      if (provider === 'codex') {
+        const result = spawnSync('codex', ['delete', '--force', sessionId], {
+          encoding: 'utf8',
+          env: cleanPtyEnv,
+        });
+        if (result.error) return { ok: false, error: result.error.message };
+        if (result.status !== 0) {
+          const msg = (result.stderr || result.stdout || `codex delete exited ${result.status}`).trim();
+          return { ok: false, error: msg };
+        }
+      } else {
+        const jsonlPath = cached.filePath || path.join(PROJECTS_DIR, cached.folder, sessionId + '.jsonl');
+        fs.rmSync(jsonlPath, { force: true });
+      }
+    }
+
+    deleteCachedSession(sessionId);
+    deleteSearchSession(sessionId);
+    deleteSessionMeta(sessionId);
+    if (cached?.provider === 'codex') refreshCodexSessions({ force: true });
+    notifyRendererProjectsChanged();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 // --- IPC: open-terminal ---
@@ -948,6 +1018,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   }
 
   const isPlainTerminal = sessionOptions?.type === 'terminal';
+  const providerId = isPlainTerminal ? 'terminal' : (sessionOptions?.provider || 'claude');
+  const provider = isPlainTerminal ? null : getProvider(providerId);
 
   // Resolve shell profile from effective settings
   const effectiveProfileId = (() => {
@@ -958,7 +1030,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (project.shellProfile !== undefined && project.shellProfile !== null) profileId = project.shellProfile;
     return profileId;
   })();
-  // WSL profiles only work for plain terminals — Claude CLI sessions need the
+  // WSL profiles only work for plain terminals — agent CLI sessions need the
   // Windows shell because session data lives on the Windows filesystem.
   const requestedProfile = resolveShell(effectiveProfileId);
   const useWslProfile = isWslShell(requestedProfile.path) && isPlainTerminal;
@@ -980,7 +1052,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   let sessionSlug = null;
   let projectFolder = null;
 
-  if (!isPlainTerminal) {
+  if (!isPlainTerminal && providerId === 'claude') {
     // Snapshot existing .jsonl files before spawning (for new session + fork/plan detection)
     projectFolder = encodeProjectPath(projectPath);
     const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
@@ -1036,71 +1108,37 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }
       }, 300);
     } else {
-      // Build claude command with session options
-      let claudeCmd;
-      if (sessionOptions?.forkFrom) {
-        claudeCmd = `claude --resume "${sessionOptions.forkFrom}" --fork-session`;
-      } else if (isNew) {
-        claudeCmd = `claude --session-id "${sessionId}"`;
-      } else {
-        claudeCmd = `claude --resume "${sessionId}"`;
-      }
+      const providerOptions = { ...(sessionOptions || {}) };
 
-      if (sessionOptions) {
-        if (sessionOptions.dangerouslySkipPermissions) {
-          claudeCmd += ' --dangerously-skip-permissions';
-        } else if (sessionOptions.permissionMode) {
-          claudeCmd += ` --permission-mode "${sessionOptions.permissionMode}"`;
-        }
-        if (sessionOptions.worktree) {
-          claudeCmd += ' --worktree';
-          if (sessionOptions.worktreeName) {
-            claudeCmd += ` "${sessionOptions.worktreeName}"`;
-          }
-        }
-        if (sessionOptions.chrome) {
-          claudeCmd += ' --chrome';
-        }
-        if (sessionOptions.addDirs) {
-          const dirs = sessionOptions.addDirs.split(',').map(d => d.trim()).filter(Boolean);
-          for (const dir of dirs) {
-            claudeCmd += ` --add-dir "${dir}"`;
-          }
-        }
-      }
-
-      if (sessionOptions?.appendSystemPrompt) {
-        // Write to a temp file and use shell substitution to avoid quoting issues
-        const tmpPrompt = path.join(os.tmpdir(), `switchboard-prompt-${sessionId}.md`);
-        fs.writeFileSync(tmpPrompt, sessionOptions.appendSystemPrompt);
-        claudeCmd += ` --append-system-prompt "$(cat '${tmpPrompt}')"`;
-      }
-
-      if (sessionOptions?.preLaunchCmd) {
-        claudeCmd = sessionOptions.preLaunchCmd + ' ' + claudeCmd;
-      }
-
-      // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
-      // (skip if user disabled IDE emulation in global settings)
-      if (sessionOptions?.mcpEmulation !== false) {
+      // Start MCP server for providers that can send diffs/file opens to Switchboard.
+      if (provider?.meta?.supportsMcp && providerOptions.mcpEmulation !== false) {
         try {
           mcpServer = await startMcpServer(sessionId, [projectPath], mainWindow, log);
-          claudeCmd += ' --ide';
+          providerOptions.mcpActive = true;
         } catch (err) {
           log.error(`[mcp] Failed to start MCP server for ${sessionId}: ${err.message}`);
         }
       }
+
+      const agentCmd = provider.buildCommand({
+        sessionId,
+        projectPath,
+        isNew,
+        options: providerOptions,
+        tempDir: os.tmpdir(),
+      });
 
       const ptyEnv = {
         ...cleanPtyEnv,
         TERM: 'xterm-256color', COLORTERM: 'truecolor',
         TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.6', FORCE_COLOR: '3', ITERM_SESSION_ID: '1',
       };
+      applySessionEnvOverrides(ptyEnv, providerId, providerOptions);
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
 
-      ptyProcess = pty.spawn(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
+      ptyProcess = pty.spawn(shell, shellArgs(shell, agentCmd, shellExtraArgs), {
         name: 'xterm-256color',
         cols: 120,
         rows: 30,
@@ -1121,6 +1159,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
     projectPath, firstResize: true,
     projectFolder, knownJsonlFiles, sessionSlug,
+    provider: providerId,
     isPlainTerminal, forkFrom: sessionOptions?.forkFrom || null,
     mcpServer, _openedAt: Date.now(),
   };
@@ -1236,13 +1275,17 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     activeSessions.delete(realId);
     // Clean up the original key too in case transition detection hasn't run yet
     activeSessions.delete(sessionId);
+    if (session.provider === 'codex') {
+      refreshCodexSessions({ force: true });
+      notifyRendererProjectsChanged();
+    }
   });
 
   if (sessionOptions?.forkFrom) {
     log.info(`[fork-spawn] tempId=${sessionId} forkFrom=${sessionOptions.forkFrom} folder=${projectFolder} knownFiles=${knownJsonlFiles.size}`);
   }
 
-  return { ok: true, reattached: false, mcpActive: !!mcpServer };
+  return { ok: true, reattached: false, mcpActive: !!mcpServer, provider: providerId };
 });
 
 // --- IPC: terminal-input (fire-and-forget) ---

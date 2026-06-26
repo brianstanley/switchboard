@@ -2,7 +2,11 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const os = require('os');
 
-const DATA_DIR = path.join(os.homedir(), '.switchboard');
+const CUSTOM_DATA_DIR = !!process.env.SWITCHBOARD_DATA_DIR;
+const DEFAULT_DATA_DIR = process.defaultApp
+  ? path.join(os.homedir(), '.switchboard-dev')
+  : path.join(os.homedir(), '.switchboard');
+const DATA_DIR = process.env.SWITCHBOARD_DATA_DIR || DEFAULT_DATA_DIR;
 const fs = require('fs');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -14,7 +18,7 @@ const OLD_LOCATIONS = [
   path.join(os.homedir(), '.claude', 'browser', 'session-browser.db'),
   path.join(os.homedir(), '.claude', 'session-browser.db'),
 ];
-if (!fs.existsSync(DB_PATH)) {
+if (!CUSTOM_DATA_DIR && !process.defaultApp && !fs.existsSync(DB_PATH)) {
   for (const oldPath of OLD_LOCATIONS) {
     if (fs.existsSync(oldPath)) {
       fs.renameSync(oldPath, DB_PATH);
@@ -42,6 +46,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS session_cache (
     sessionId TEXT PRIMARY KEY,
     folder TEXT NOT NULL,
+    provider TEXT DEFAULT 'claude',
     projectPath TEXT,
     summary TEXT,
     firstPrompt TEXT,
@@ -49,7 +54,8 @@ db.exec(`
     modified TEXT,
     messageCount INTEGER DEFAULT 0,
     slug TEXT,
-    aiTitle TEXT
+    aiTitle TEXT,
+    filePath TEXT
   )
 `);
 
@@ -99,6 +105,12 @@ const migrations = [
     try { db.exec('DELETE FROM session_cache'); } catch {}
     try { db.exec('DELETE FROM cache_meta'); } catch {}
   },
+  // v4: Add provider metadata so non-Claude sessions can share the cache
+  // without colliding with Claude's folder-based indexer.
+  (db) => {
+    try { db.exec("ALTER TABLE session_cache ADD COLUMN provider TEXT DEFAULT 'claude'"); } catch {}
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN filePath TEXT'); } catch {}
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -114,6 +126,8 @@ for (let i = currentDbVersion; i < migrations.length; i++) {
 if (migrations.length > currentDbVersion) {
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('db_version', ?)").run(JSON.stringify(migrations.length));
 }
+
+db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_provider ON session_cache(provider)');
 
 // --- FTS5 full-text search ---
 db.exec(`
@@ -148,24 +162,28 @@ const stmts = {
     INSERT INTO session_meta (sessionId, archived) VALUES (?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET archived = excluded.archived
   `),
+  sessionMetaDelete: db.prepare('DELETE FROM session_meta WHERE sessionId = ?'),
   // Session cache statements
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, provider, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, filePath)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
-      folder = excluded.folder, projectPath = excluded.projectPath,
+      folder = excluded.folder, provider = excluded.provider,
+      projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = excluded.aiTitle
+      aiTitle = excluded.aiTitle, filePath = excluded.filePath
   `),
   cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
+  cacheGetByProvider: db.prepare('SELECT sessionId FROM session_cache WHERE provider = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
   cacheDeleteFolder: db.prepare('DELETE FROM session_cache WHERE folder = ?'),
+  cacheDeleteProvider: db.prepare('DELETE FROM session_cache WHERE provider = ?'),
   // Cache meta statements
   metaGet: db.prepare('SELECT * FROM cache_meta WHERE folder = ?'),
   metaGetAll: db.prepare('SELECT * FROM cache_meta'),
@@ -231,6 +249,10 @@ function setArchived(sessionId, archived) {
   stmts.upsertArchived.run(sessionId, archived ? 1 : 0);
 }
 
+function deleteSessionMeta(sessionId) {
+  stmts.sessionMetaDelete.run(sessionId);
+}
+
 // --- Session cache functions ---
 
 function isCachePopulated() {
@@ -244,9 +266,9 @@ function getAllCached() {
 const upsertCachedSessionsBatch = db.transaction((sessions) => {
   for (const s of sessions) {
     stmts.cacheUpsert.run(
-      s.sessionId, s.folder, s.projectPath, s.summary,
+      s.sessionId, s.folder, s.provider || 'claude', s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
-      s.slug || null, s.aiTitle || null
+      s.slug || null, s.aiTitle || null, s.filePath || null
     );
   }
 });
@@ -268,6 +290,10 @@ function getCachedSession(sessionId) {
   return stmts.cacheGetSession.get(sessionId) || null;
 }
 
+function getCachedByProvider(provider) {
+  return stmts.cacheGetByProvider.all(provider);
+}
+
 function deleteCachedSession(sessionId) {
   stmts.cacheDeleteSession.run(sessionId);
 }
@@ -275,6 +301,10 @@ function deleteCachedSession(sessionId) {
 function deleteCachedFolder(folder) {
   stmts.cacheDeleteFolder.run(folder);
   stmts.metaDelete.run(folder);
+}
+
+function deleteCachedProvider(provider) {
+  stmts.cacheDeleteProvider.run(provider);
 }
 
 function getFolderMeta(folder) {
@@ -375,9 +405,9 @@ function closeDb() {
 }
 
 module.exports = {
-  getMeta, getAllMeta, setName, toggleStar, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
-  deleteCachedSession, deleteCachedFolder,
+  getMeta, getAllMeta, setName, toggleStar, setArchived, deleteSessionMeta,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, getCachedByProvider, upsertCachedSessions,
+  deleteCachedSession, deleteCachedFolder, deleteCachedProvider,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,

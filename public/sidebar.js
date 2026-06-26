@@ -9,6 +9,29 @@
 // showNewSessionPopover, openSettingsViewer, showResumeSessionDialog,
 // showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js)
 
+const deletingSessionIds = new Set();
+
+function setSessionDeleting(item, sessionId, deleting) {
+  if (!item) return;
+  if (deleting) {
+    deletingSessionIds.add(sessionId);
+    item.classList.add('deleting');
+    item.setAttribute('aria-busy', 'true');
+    const row = item.querySelector('.session-row');
+    if (row && !row.querySelector('.session-delete-loading')) {
+      const overlay = document.createElement('div');
+      overlay.className = 'session-delete-loading';
+      overlay.innerHTML = '<span class="session-delete-spinner"></span><span>Deleting...</span>';
+      row.appendChild(overlay);
+    }
+  } else {
+    deletingSessionIds.delete(sessionId);
+    item.classList.remove('deleting');
+    item.removeAttribute('aria-busy');
+    item.querySelector('.session-delete-loading')?.remove();
+  }
+}
+
 function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -558,7 +581,10 @@ function rebindSidebarEvents(projects) {
     const session = sessionMap.get(sessionId);
     if (!session) return;
 
-    item.onclick = () => openSession(session);
+    item.onclick = () => {
+      if (deletingSessionIds.has(session.sessionId)) return;
+      openSession(session);
+    };
 
     const pin = item.querySelector('.session-pin');
     if (pin) {
@@ -627,6 +653,40 @@ function rebindSidebarEvents(projects) {
         loadProjects();
       };
     }
+
+    const deleteBtn = item.querySelector('.session-delete-btn');
+    if (deleteBtn) {
+      deleteBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (deletingSessionIds.has(session.sessionId)) return;
+        const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary || session.sessionId);
+        if (!confirm(`Delete "${displayName}" from history?\n\nThis permanently deletes the saved session history.`)) return;
+
+        setSessionDeleting(item, session.sessionId, true);
+
+        try {
+          const result = await window.api.deleteSession(session.sessionId);
+          if (!result?.ok) {
+            alert('Could not delete session: ' + (result?.error || 'unknown error'));
+            setSessionDeleting(item, session.sessionId, false);
+            return;
+          }
+
+          if (openSessions.has(session.sessionId)) {
+            destroySession(session.sessionId);
+          }
+          pendingSessions.delete(session.sessionId);
+          sessionMap.delete(session.sessionId);
+          activePtyIds.delete(session.sessionId);
+          await pollActiveSessions();
+          await loadProjects();
+          deletingSessionIds.delete(session.sessionId);
+        } catch (err) {
+          alert('Could not delete session: ' + (err?.message || 'unknown error'));
+          setSessionDeleting(item, session.sessionId, false);
+        }
+      };
+    }
   });
 
   // Auto-expand slug group if it contains the active session
@@ -646,6 +706,10 @@ function buildSessionItem(session) {
   item.id = 'si-' + session.sessionId;
   if (session.type === 'terminal') item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
+  if (deletingSessionIds.has(session.sessionId)) {
+    item.classList.add('deleting');
+    item.setAttribute('aria-busy', 'true');
+  }
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
   if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
   if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
@@ -662,6 +726,9 @@ function buildSessionItem(session) {
   // Pin
   const pin = document.createElement('span');
   pin.className = 'session-pin' + (session.starred ? ' pinned' : '');
+  pin.dataset.tooltip = session.starred ? 'Unpin session' : 'Pin session';
+  pin.setAttribute('role', 'button');
+  pin.setAttribute('aria-label', pin.dataset.tooltip);
   pin.innerHTML = session.starred
     ? '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>'
     : '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>';
@@ -689,7 +756,14 @@ function buildSessionItem(session) {
   if (session.type === 'terminal') {
     const badge = document.createElement('span');
     badge.className = 'terminal-badge';
+    badge.dataset.tooltip = 'Terminal';
     badge.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>';
+    summaryEl.prepend(badge);
+  } else if (session.provider === 'codex') {
+    const badge = document.createElement('span');
+    badge.className = 'provider-badge codex-badge';
+    badge.dataset.tooltip = 'Codex';
+    badge.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l-5 7 5 7"/><path d="M16 5l5 7-5 7"/><path d="M14 4l-4 16"/></svg>';
     summaryEl.prepend(badge);
   }
   info.appendChild(summaryEl);
@@ -709,6 +783,11 @@ function buildSessionItem(session) {
   archiveBtn.className = 'session-archive-btn';
   archiveBtn.title = session.archived ? 'Unarchive' : 'Archive';
   archiveBtn.innerHTML = ICONS.archive(16);
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'session-delete-btn';
+  deleteBtn.title = 'Delete from history';
+  deleteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>';
 
   const forkBtn = document.createElement('button');
   forkBtn.className = 'session-fork-btn';
@@ -730,6 +809,7 @@ function buildSessionItem(session) {
     actions.appendChild(forkBtn);
     actions.appendChild(jsonlBtn);
     actions.appendChild(archiveBtn);
+    actions.appendChild(deleteBtn);
     actions.appendChild(launchConfigBtn);
   }
 
@@ -737,6 +817,12 @@ function buildSessionItem(session) {
   row.appendChild(dot);
   row.appendChild(info);
   row.appendChild(actions);
+  if (deletingSessionIds.has(session.sessionId)) {
+    const deletingOverlay = document.createElement('div');
+    deletingOverlay.className = 'session-delete-loading';
+    deletingOverlay.innerHTML = '<span class="session-delete-spinner"></span><span>Deleting...</span>';
+    row.appendChild(deletingOverlay);
+  }
   item.appendChild(row);
 
   return item;

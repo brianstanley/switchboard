@@ -5,6 +5,7 @@ const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
 const { readSessionFile } = require('./read-session-file');
 const { encodeProjectPath } = require('./encode-project-path');
+const { scanCodexSessions } = require('./codex-session-scanner');
 
 /**
  * Session cache module.
@@ -12,8 +13,10 @@ const { encodeProjectPath } = require('./encode-project-path');
  */
 let PROJECTS_DIR, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
+let getCachedByProvider, deleteCachedProvider;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
+let lastCodexScanAt = 0;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -25,6 +28,8 @@ function init(ctx) {
   getCachedByFolder = ctx.db.getCachedByFolder;
   upsertCachedSessions = ctx.db.upsertCachedSessions;
   deleteCachedSession = ctx.db.deleteCachedSession;
+  getCachedByProvider = ctx.db.getCachedByProvider;
+  deleteCachedProvider = ctx.db.deleteCachedProvider;
   deleteSearchFolder = ctx.db.deleteSearchFolder;
   deleteSearchSession = ctx.db.deleteSearchSession;
   upsertSearchEntries = ctx.db.upsertSearchEntries;
@@ -163,13 +168,55 @@ function populateCacheFromFilesystem() {
     for (const folder of folders) {
       refreshFolder(folder);
     }
+    refreshCodexSessions({ force: true });
   } catch (err) {
     console.error('Error populating cache:', err);
   }
 }
 
+function refreshCodexSessions({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - lastCodexScanAt < 5000) return false;
+  lastCodexScanAt = now;
+
+  let sessions;
+  try {
+    sessions = scanCodexSessions();
+  } catch (err) {
+    if (log) log.warn(`[codex] scan failed: ${err.message}`);
+    return false;
+  }
+
+  const previous = getCachedByProvider ? getCachedByProvider('codex').map(row => row.sessionId) : [];
+  const currentIds = new Set(sessions.map(s => s.sessionId));
+  const changed = sessions.length > 0 || previous.length > 0;
+
+  if (deleteCachedProvider) deleteCachedProvider('codex');
+  for (const sessionId of previous) {
+    deleteSearchSession(sessionId);
+  }
+
+  if (sessions.length > 0) {
+    upsertCachedSessions(sessions);
+    upsertSearchEntries(sessions.map(s => {
+      const name = getMeta(s.sessionId)?.name || s.aiTitle || '';
+      return {
+        id: s.sessionId,
+        type: 'session',
+        folder: s.folder,
+        title: (name ? name + ' ' : '') + s.summary,
+        body: s.textContent || s.firstPrompt || '',
+      };
+    }));
+  }
+
+  return changed || currentIds.size > 0;
+}
+
 /** Build projects response from cached data */
 function buildProjectsFromCache(showArchived) {
+  refreshCodexSessions();
+
   const metaMap = getAllMeta();
   const cachedRows = getAllCached();
   const global = getSetting('global') || {};
@@ -195,6 +242,8 @@ function buildProjectsFromCache(showArchived) {
       modified: row.modified,
       messageCount: row.messageCount,
       projectPath: row.projectPath,
+      provider: row.provider || 'claude',
+      filePath: row.filePath || null,
       slug: row.slug || null,
       aiTitle: row.aiTitle || null,
       name: meta?.name || null,
@@ -259,6 +308,37 @@ function buildProjectsFromCache(showArchived) {
         modified: new Date(session._openedAt).toISOString(),
         created: new Date(session._openedAt).toISOString(),
         type: 'terminal',
+      });
+    }
+  }
+
+  // Inject active provider sessions whose persisted id may not be known yet
+  // (notably new Codex sessions, since the CLI owns the session id).
+  for (const [sessionId, session] of activeSessions) {
+    if (session.exited || session.isPlainTerminal) continue;
+    if (!session.projectPath) continue;
+    if (hiddenProjects.has(session.projectPath)) continue;
+    if (!projectMap.has(session.projectPath)) {
+      projectMap.set(session.projectPath, {
+        folder: encodeProjectPath(session.projectPath),
+        projectPath: session.projectPath,
+        sessions: [],
+      });
+    }
+    const proj = projectMap.get(session.projectPath);
+    if (!proj.sessions.some(s => s.sessionId === sessionId)) {
+      proj.sessions.push({
+        sessionId,
+        summary: session.provider === 'codex' ? 'New Codex session' : 'New session',
+        firstPrompt: '',
+        projectPath: session.projectPath,
+        provider: session.provider || 'claude',
+        name: null,
+        starred: 0,
+        archived: 0,
+        messageCount: 0,
+        modified: new Date(session._openedAt).toISOString(),
+        created: new Date(session._openedAt).toISOString(),
       });
     }
   }
@@ -353,6 +433,7 @@ function populateCacheViaWorker() {
 
     populatingCache = false;
     sendStatus(`Indexed ${sessionCount} sessions across ${msg.results.length} projects`, 'done');
+    refreshCodexSessions({ force: true });
     // Clear status after a few seconds
     setTimeout(() => sendStatus(''), 5000);
     notifyRendererProjectsChanged();
@@ -384,6 +465,7 @@ module.exports = {
   readFolderFromFilesystem,
   refreshFolder,
   populateCacheFromFilesystem,
+  refreshCodexSessions,
   buildProjectsFromCache,
   notifyRendererProjectsChanged,
   sendStatus,

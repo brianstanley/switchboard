@@ -64,9 +64,17 @@
     }
 
     const permModeValue = fieldValue('permissionMode', '');
+    const dangerousSkipValue = fieldValue('dangerouslySkipPermissions', false);
     const worktreeValue = fieldValue('worktree', false);
     const worktreeNameValue = fieldValue('worktreeName', '');
     const chromeValue = fieldValue('chrome', false);
+    const defaultProviderValue = fieldValue('defaultProvider', 'claude');
+    const codexModelValue = fieldValue('codexModel', '');
+    const codexProfileValue = fieldValue('codexProfile', '');
+    const codexSandboxValue = fieldValue('codexSandbox', '');
+    const codexApprovalValue = fieldValue('codexApprovalPolicy', '');
+    const codexWebSearchValue = fieldValue('codexWebSearch', false);
+    const codexNoAltScreenValue = fieldValue('codexNoAltScreen', true);
     const preLaunchValue = fieldValue('preLaunchCmd', '');
     const addDirsValue = fieldValue('addDirs', '');
     const visCountValue = fieldValue('visibleSessionCount', 10);
@@ -157,7 +165,128 @@
       </div>
 
       <div class="settings-section">
+        <div class="settings-section-title">Codex CLI Options</div>
+
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Model</span>
+              ${useGlobalCheckbox('codexModel')}
+            </div>
+            <div class="settings-description">Optional <code>--model</code> override for Codex</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="text" class="settings-input" id="sv-codex-model" placeholder="e.g. gpt-5.5" value="${escapeHtml(codexModelValue)}" ${fieldDisabled('codexModel')}>
+          </div>
+        </div>
+
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Profile</span>
+              ${useGlobalCheckbox('codexProfile')}
+            </div>
+            <div class="settings-description">Optional <code>--profile</code> config profile for Codex</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="text" class="settings-input" id="sv-codex-profile" placeholder="profile name" value="${escapeHtml(codexProfileValue)}" ${fieldDisabled('codexProfile')}>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Sandbox</span>
+              ${useGlobalCheckbox('codexSandbox')}
+            </div>
+            <div class="settings-description">Codex sandbox policy</div>
+          </div>
+          <div class="settings-field-control">
+            <select class="settings-select" id="sv-codex-sandbox" ${fieldDisabled('codexSandbox')}>
+              <option value="">Default</option>
+              <option value="read-only" ${codexSandboxValue === 'read-only' ? 'selected' : ''}>Read Only</option>
+              <option value="workspace-write" ${codexSandboxValue === 'workspace-write' ? 'selected' : ''}>Workspace Write</option>
+              <option value="danger-full-access" ${codexSandboxValue === 'danger-full-access' ? 'selected' : ''}>Danger Full Access</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Approval Mode</span>
+              ${useGlobalCheckbox('codexApprovalPolicy')}
+            </div>
+            <div class="settings-description">Codex <code>--ask-for-approval</code> policy</div>
+          </div>
+          <div class="settings-field-control">
+            <select class="settings-select" id="sv-codex-approval" ${fieldDisabled('codexApprovalPolicy')}>
+              <option value="">Default</option>
+              <option value="untrusted" ${codexApprovalValue === 'untrusted' ? 'selected' : ''}>Untrusted</option>
+              <option value="on-request" ${codexApprovalValue === 'on-request' ? 'selected' : ''}>On Request</option>
+              <option value="never" ${codexApprovalValue === 'never' ? 'selected' : ''}>Never</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Web Search</span>
+              ${useGlobalCheckbox('codexWebSearch')}
+            </div>
+            <div class="settings-description">Enable Codex live web search</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-codex-web-search" ${codexWebSearchValue ? 'checked' : ''} ${fieldDisabled('codexWebSearch')}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">No Alt Screen</span>
+              ${useGlobalCheckbox('codexNoAltScreen')}
+            </div>
+            <div class="settings-description">Run Codex inline and preserve scrollback</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-codex-no-alt" ${codexNoAltScreenValue ? 'checked' : ''} ${fieldDisabled('codexNoAltScreen')}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <div class="settings-section-title">Session Launch</div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Default Provider</span>
+              ${useGlobalCheckbox('defaultProvider')}
+            </div>
+            <div class="settings-description">Provider used by default launch actions</div>
+          </div>
+          <div class="settings-field-control">
+            <select class="settings-select" id="sv-default-provider" ${fieldDisabled('defaultProvider')}>
+              <option value="claude" ${defaultProviderValue === 'claude' ? 'selected' : ''}>Claude</option>
+              <option value="codex" ${defaultProviderValue === 'codex' ? 'selected' : ''}>Codex</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Dangerous / YOLO</span>
+              ${useGlobalCheckbox('dangerouslySkipPermissions')}
+            </div>
+            <div class="settings-description">Bypass safety prompts for the selected provider</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-dangerous-skip" ${dangerousSkipValue ? 'checked' : ''} ${fieldDisabled('dangerouslySkipPermissions')}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
 
         <div class="settings-field settings-field-wide">
           <div class="settings-field-info">
@@ -165,7 +294,7 @@
               <span class="settings-label">Pre-launch Command</span>
               ${useGlobalCheckbox('preLaunchCmd')}
             </div>
-            <div class="settings-description">Prepended to the claude command (e.g. "aws-vault exec profile --")</div>
+            <div class="settings-description">Prepended to the selected provider command (e.g. "aws-vault exec profile --")</div>
           </div>
           <div class="settings-field-control">
             <input type="text" class="settings-input" id="sv-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(preLaunchValue)}" ${fieldDisabled('preLaunchCmd')}>
@@ -193,7 +322,7 @@
         <div class="settings-field">
           <div class="settings-field-info">
             <span class="settings-label">Shell Profile</span>
-            <div class="settings-description">Shell used for terminal and Claude sessions. Changes take effect for new sessions only.</div>
+            <div class="settings-description">Shell used for terminal and provider sessions. Changes take effect for new sessions only.</div>
           </div>
           <div class="settings-field-control">
             <select class="settings-select" id="sv-shell-profile">
@@ -262,10 +391,18 @@
       cb.addEventListener('change', () => {
         const field = cb.dataset.field;
         const fieldMap = {
+          defaultProvider: 'sv-default-provider',
+          dangerouslySkipPermissions: 'sv-dangerous-skip',
           permissionMode: 'sv-perm-mode',
           worktree: 'sv-worktree',
           worktreeName: 'sv-worktree-name',
           chrome: 'sv-chrome',
+          codexModel: 'sv-codex-model',
+          codexProfile: 'sv-codex-profile',
+          codexSandbox: 'sv-codex-sandbox',
+          codexApprovalPolicy: 'sv-codex-approval',
+          codexWebSearch: 'sv-codex-web-search',
+          codexNoAltScreen: 'sv-codex-no-alt',
           preLaunchCmd: 'sv-pre-launch',
           addDirs: 'sv-add-dirs',
         };
@@ -284,10 +421,18 @@
           if (!cb.checked) {
             const field = cb.dataset.field;
             const fieldMap = {
+              defaultProvider: () => settingsViewerBody.querySelector('#sv-default-provider').value || 'claude',
+              dangerouslySkipPermissions: () => settingsViewerBody.querySelector('#sv-dangerous-skip').checked,
               permissionMode: () => settingsViewerBody.querySelector('#sv-perm-mode').value || null,
               worktree: () => settingsViewerBody.querySelector('#sv-worktree').checked,
               worktreeName: () => settingsViewerBody.querySelector('#sv-worktree-name').value.trim(),
               chrome: () => settingsViewerBody.querySelector('#sv-chrome').checked,
+              codexModel: () => settingsViewerBody.querySelector('#sv-codex-model').value.trim(),
+              codexProfile: () => settingsViewerBody.querySelector('#sv-codex-profile').value.trim(),
+              codexSandbox: () => settingsViewerBody.querySelector('#sv-codex-sandbox').value || null,
+              codexApprovalPolicy: () => settingsViewerBody.querySelector('#sv-codex-approval').value || null,
+              codexWebSearch: () => settingsViewerBody.querySelector('#sv-codex-web-search').checked,
+              codexNoAltScreen: () => settingsViewerBody.querySelector('#sv-codex-no-alt').checked,
               preLaunchCmd: () => settingsViewerBody.querySelector('#sv-pre-launch').value.trim(),
               addDirs: () => settingsViewerBody.querySelector('#sv-add-dirs').value.trim(),
             };
@@ -295,10 +440,18 @@
           }
         });
       } else {
+        settings.defaultProvider = settingsViewerBody.querySelector('#sv-default-provider').value || 'claude';
+        settings.dangerouslySkipPermissions = settingsViewerBody.querySelector('#sv-dangerous-skip').checked;
         settings.permissionMode = settingsViewerBody.querySelector('#sv-perm-mode').value || null;
         settings.worktree = settingsViewerBody.querySelector('#sv-worktree').checked;
         settings.worktreeName = settingsViewerBody.querySelector('#sv-worktree-name').value.trim();
         settings.chrome = settingsViewerBody.querySelector('#sv-chrome').checked;
+        settings.codexModel = settingsViewerBody.querySelector('#sv-codex-model').value.trim();
+        settings.codexProfile = settingsViewerBody.querySelector('#sv-codex-profile').value.trim();
+        settings.codexSandbox = settingsViewerBody.querySelector('#sv-codex-sandbox').value || null;
+        settings.codexApprovalPolicy = settingsViewerBody.querySelector('#sv-codex-approval').value || null;
+        settings.codexWebSearch = settingsViewerBody.querySelector('#sv-codex-web-search').checked;
+        settings.codexNoAltScreen = settingsViewerBody.querySelector('#sv-codex-no-alt').checked;
         settings.preLaunchCmd = settingsViewerBody.querySelector('#sv-pre-launch').value.trim();
         settings.addDirs = settingsViewerBody.querySelector('#sv-add-dirs').value.trim();
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10;

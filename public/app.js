@@ -695,11 +695,13 @@ async function loadProjects({ resort = false } = {}) {
 async function launchNewSession(project, sessionOptions) {
   const sessionId = crypto.randomUUID();
   const projectPath = project.projectPath;
+  const provider = sessionOptions?.provider || 'claude';
   const session = {
     sessionId,
-    summary: 'New session',
+    summary: provider === 'codex' ? 'New Codex session' : 'New session',
     firstPrompt: '',
     projectPath,
+    provider,
     name: null,
     starred: 0,
     archived: 0,
@@ -740,8 +742,8 @@ async function launchNewSession(project, sessionOptions) {
 }
 
 // Legacy alias
-function openNewSession(project) {
-  return launchNewSession(project);
+async function openNewSession(project) {
+  return launchNewSession(project, await resolveDefaultSessionOptions(project));
 }
 
 async function showTerminalHeader(session) {
@@ -792,7 +794,8 @@ async function openSession(session, customOptions) {
   const entry = createTerminalEntry(session);
 
   // Open terminal in main process
-  const resumeOptions = customOptions || await resolveDefaultSessionOptions({ projectPath });
+  const resumeOptions = customOptions || await resolveDefaultSessionOptions({ projectPath }, session.provider || 'claude');
+  if (!resumeOptions.provider) resumeOptions.provider = session.provider || 'claude';
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);

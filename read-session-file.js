@@ -45,7 +45,7 @@ function readSessionFile(filePath, folder, projectPath) {
     }
     if (!summary || messageCount < 1) return null;
     return {
-      sessionId, folder, projectPath,
+      sessionId, folder, projectPath, provider: 'claude', filePath,
       summary, firstPrompt: summary,
       created: stat.birthtime.toISOString(),
       modified: stat.mtime.toISOString(),
