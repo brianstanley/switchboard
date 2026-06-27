@@ -6,7 +6,7 @@
  * Watches files for external changes and reloads automatically.
  *
  * Toolbar buttons are shown/hidden automatically based on file type:
- *   - Preview: shown for markdown files
+ *   - Preview: shown for markdown and HTML files
  *   - Wrap: always shown (defaults on for markdown, off for others)
  *   - Save: shown if onSave is provided
  *   - Close: shown if onClose is provided
@@ -25,6 +25,7 @@ class ViewerPanel {
    * @param {boolean}   opts.copyContent  - Show copy-content button
    * @param {string}    opts.language     - 'markdown' or 'auto' (default 'markdown')
    * @param {string}    opts.storageKey   - localStorage key for preview mode persistence
+   * @param {boolean}   opts.preferPreview - Open previewable files in preview mode by default
    */
   constructor(container, opts = {}) {
     this.container = container;
@@ -33,7 +34,9 @@ class ViewerPanel {
     // State
     this.filePath = '';
     this.editorView = null;
-    this.previewMode = opts.storageKey ? localStorage.getItem(opts.storageKey) === 'true' : false;
+    this.editorLanguageKey = '';
+    this.previewMode = false;
+    this.previewKind = 'none';
     this.wrapMode = false;
     this._watchedPath = null;
     this._saving = false;
@@ -50,7 +53,7 @@ class ViewerPanel {
     });
     container.insertBefore(this.toolbar.el, container.firstChild);
 
-    // Hide preview initially (shown in open() if markdown)
+    // Hide preview initially (shown in open() for previewable file types)
     if (this.toolbar.previewBtn) this.toolbar.previewBtn.style.display = 'none';
 
     // Create editor area
@@ -134,26 +137,26 @@ class ViewerPanel {
     this.toolbar.setTitle(title);
     this.toolbar.setPath(filePath);
 
-    const isMd = this._isMarkdown(filePath);
+    this.previewKind = this._previewKind(filePath);
+    const isMd = this.previewKind === 'markdown';
+    const isPreviewable = this.previewKind !== 'none';
+
+    // Reset to edit mode before updating content (without touching localStorage)
+    this._showEditor({ persist: false });
 
     // Show/hide preview button based on file type
     if (this.toolbar.previewBtn) {
-      this.toolbar.previewBtn.style.display = isMd ? '' : 'none';
+      this.toolbar.previewBtn.style.display = isPreviewable ? '' : 'none';
+      this._setPreviewButtonTitle(false);
     }
 
-    // Save preview preference before resetting
-    const wantPreview = isMd && this.opts.storageKey && localStorage.getItem(this.opts.storageKey) === 'true';
-
-    // Reset to edit mode before updating content (without touching localStorage)
-    if (this.previewMode) {
-      this.previewEl.style.display = 'none';
-      this.editorEl.style.display = '';
-      if (this.toolbar.previewBtn) this.toolbar.previewBtn.classList.remove('active');
-      this.previewMode = false;
-    }
+    const wantPreview = isPreviewable && this._shouldOpenPreview();
 
     // Create or update editor
-    if (!this.editorView) {
+    const languageKey = this._languageKey(filePath);
+    if (!this.editorView || this.editorLanguageKey !== languageKey) {
+      this._destroyEditor();
+      this.editorLanguageKey = languageKey;
       this._createEditor(content, filePath);
     } else {
       this.editorView.dispatch({
@@ -197,19 +200,121 @@ class ViewerPanel {
   }
 
   _togglePreview() {
-    this.previewMode = toggleMarkdownPreview({
-      editorEl: this.editorEl,
-      previewEl: this.previewEl,
-      toggleBtn: this.toolbar.previewBtn,
-      editorView: this.editorView,
-      isPreview: this.previewMode,
-      storageKey: this.opts.storageKey,
-    });
+    if (this.previewKind === 'none') return;
+    if (this.previewMode) {
+      this._showEditor({ persist: true });
+    } else {
+      this._showPreview({ persist: true });
+    }
   }
 
   _setPreview(show) {
     if (this.previewMode === show) return;
-    this._togglePreview();
+    if (show) this._showPreview({ persist: true });
+    else this._showEditor({ persist: true });
+  }
+
+  _showPreview({ persist = false } = {}) {
+    if (this.previewKind === 'none' || !this.editorView) return;
+
+    const content = this.getContent();
+    if (this.previewKind === 'markdown') {
+      this.previewEl.className = 'markdown-preview';
+      this.previewEl.innerHTML = window.marked.parse(content);
+      this.previewEl.style.display = 'block';
+    } else if (this.previewKind === 'html') {
+      this._renderHtmlPreview(content);
+      this.previewEl.style.display = 'flex';
+    }
+
+    this.editorEl.style.display = 'none';
+    this.previewMode = true;
+    if (this.toolbar.previewBtn) {
+      this.toolbar.previewBtn.classList.add('active');
+      this._setPreviewButtonTitle(true);
+    }
+    if (persist && this.opts.storageKey) localStorage.setItem(this.opts.storageKey, 'true');
+  }
+
+  _showEditor({ persist = false } = {}) {
+    this.previewEl.style.display = 'none';
+    this.editorEl.style.display = '';
+    this.previewMode = false;
+    if (this.toolbar.previewBtn) {
+      this.toolbar.previewBtn.classList.remove('active');
+      this._setPreviewButtonTitle(false);
+    }
+    if (persist && this.opts.storageKey) localStorage.setItem(this.opts.storageKey, 'false');
+  }
+
+  _renderHtmlPreview(content) {
+    this.previewEl.className = 'html-preview';
+    this.previewEl.innerHTML = '';
+
+    const frame = document.createElement('iframe');
+    frame.className = 'html-preview-frame';
+    frame.setAttribute('sandbox', 'allow-same-origin');
+    frame.referrerPolicy = 'no-referrer';
+    frame.srcdoc = this._htmlWithBase(content);
+
+    this.previewEl.appendChild(frame);
+  }
+
+  _htmlWithBase(content) {
+    const html = String(content || '');
+    if (/<base\s/i.test(html)) return html;
+
+    const baseHref = this._fileDirUrl(this.filePath);
+    const baseTag = baseHref ? `<base href="${this._escapeAttr(baseHref)}">` : '';
+    if (!baseTag) return html;
+
+    if (/<head\b[^>]*>/i.test(html)) {
+      return html.replace(/<head\b([^>]*)>/i, `<head$1>${baseTag}`);
+    }
+    if (/<html\b[^>]*>/i.test(html)) {
+      return html.replace(/<html\b([^>]*)>/i, `<html$1><head>${baseTag}</head>`);
+    }
+    return `<!doctype html><html><head>${baseTag}</head><body>${html}</body></html>`;
+  }
+
+  _fileDirUrl(filePath) {
+    if (!filePath) return '';
+    const normalized = String(filePath).replace(/\\/g, '/');
+    const slash = normalized.lastIndexOf('/');
+    if (slash < 0) return '';
+    const dir = normalized.slice(0, slash + 1);
+    const encoded = dir
+      .split('/')
+      .map((part, index) => (index === 0 && /^[A-Za-z]:$/.test(part) ? part : encodeURIComponent(part)))
+      .join('/');
+    if (/^[A-Za-z]:\//.test(dir)) return `file:///${encoded}`;
+    return `file://${encoded}`;
+  }
+
+  _escapeAttr(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  _setPreviewButtonTitle(active) {
+    if (!this.toolbar.previewBtn) return;
+    if (active) {
+      this.toolbar.previewBtn.title = 'Back to editor';
+      return;
+    }
+    this.toolbar.previewBtn.title = this.previewKind === 'html'
+      ? 'Toggle HTML preview'
+      : 'Toggle markdown preview';
+  }
+
+  _shouldOpenPreview() {
+    if (this.opts.storageKey) {
+      return localStorage.getItem(this.opts.storageKey) === 'true';
+    }
+    return !!this.opts.preferPreview;
   }
 
   _toggleWrap() {
@@ -243,16 +348,23 @@ class ViewerPanel {
 
   destroy() {
     this._unwatchFile();
+    this._destroyEditor();
+    this.previewEl.innerHTML = '';
+    this.previewEl.style.display = 'none';
+    this.previewMode = false;
+    this.previewKind = 'none';
+  }
+
+  _destroyEditor() {
     if (this.editorView) {
       this.editorView.destroy();
       this.editorView = null;
     }
+    this.editorLanguageKey = '';
     // Clear stale search/goto-line bar references so they get recreated with the new editor
     delete this.editorEl._cmSearchBar;
     delete this.editorEl._cmGotoLine;
     this.editorEl.innerHTML = '';
-    this.previewEl.innerHTML = '';
-    this.previewEl.style.display = 'none';
   }
 
   // ── File Watching ──────────────────────────────────────────────────
@@ -286,14 +398,35 @@ class ViewerPanel {
     }
 
     if (this.previewMode) {
-      this.previewEl.innerHTML = window.marked.parse(newContent);
+      if (this.previewKind === 'markdown') {
+        this.previewEl.innerHTML = window.marked.parse(newContent);
+      } else if (this.previewKind === 'html') {
+        this._renderHtmlPreview(newContent);
+      }
     }
+  }
+
+  _previewKind(filePath) {
+    if (this._isMarkdown(filePath)) return 'markdown';
+    if (this._isHtml(filePath)) return 'html';
+    return 'none';
   }
 
   _isMarkdown(filePath) {
     if (!filePath) return this.opts.language === 'markdown';
     const ext = filePath.split('.').pop()?.toLowerCase();
-    return ext === 'md' || ext === 'mdx';
+    return ext === 'md' || ext === 'mdx' || ext === 'markdown';
+  }
+
+  _isHtml(filePath) {
+    if (!filePath) return false;
+    const ext = filePath.split('.').pop()?.toLowerCase();
+    return ext === 'html' || ext === 'htm';
+  }
+
+  _languageKey(filePath) {
+    if (this.opts.language !== 'auto') return this.opts.language || 'markdown';
+    return filePath ? (filePath.split('.').pop()?.toLowerCase() || '') : '';
   }
 }
 

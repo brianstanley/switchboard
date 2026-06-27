@@ -129,7 +129,7 @@ function createViewerToolbar(opts = {}) {
     previewBtn = document.createElement('button');
     previewBtn.className = 'fp-toolbar-btn fp-icon-btn';
     previewBtn.innerHTML = PREVIEW_ICON;
-    previewBtn.title = 'Toggle markdown preview';
+    previewBtn.title = 'Toggle preview';
     controlsEl.appendChild(previewBtn);
   }
 
@@ -200,7 +200,7 @@ function createViewerToolbar(opts = {}) {
     setPreviewMode(active) {
       if (!previewBtn) return;
       previewBtn.classList.toggle('active', active);
-      previewBtn.title = active ? 'Back to editor' : 'Toggle markdown preview';
+      previewBtn.title = active ? 'Back to editor' : 'Toggle preview';
     },
 
     setWrapMode(active) {

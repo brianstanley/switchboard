@@ -76,6 +76,7 @@ function initFilePanel() {
 
   fpViewerPanel = new ViewerPanel(vpContainer, {
     language: 'auto',
+    preferPreview: true,
     onSave: (filePath, content) => window.api.saveFileForPanel(filePath, content),
     onClose: handleClose,
   });
