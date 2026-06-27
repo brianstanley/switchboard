@@ -42,6 +42,7 @@ const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { getProvider, getProviderMeta } = require('./providers');
 const { adaptCodexRollout } = require('./codex-log-adapter');
+const { getCodexStats } = require('./codex-session-scanner');
 const { adaptPiSession } = require('./pi-log-adapter');
 const { listSessionSkills } = require('./skill-scanner');
 
@@ -95,6 +96,57 @@ const MAX_BUFFER_SIZE = 256 * 1024;
 // Active PTY sessions
 const activeSessions = new Map();
 let mainWindow = null;
+
+function mergeDailyModelTokens(baseEntries = [], extraEntries = []) {
+  const byDate = new Map();
+
+  function addEntries(entries) {
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (!entry?.date) continue;
+      if (!byDate.has(entry.date)) byDate.set(entry.date, { date: entry.date, tokensByModel: {} });
+      const target = byDate.get(entry.date).tokensByModel;
+      for (const [model, tokens] of Object.entries(entry.tokensByModel || {})) {
+        target[model] = (target[model] || 0) + Number(tokens || 0);
+      }
+    }
+  }
+
+  addEntries(baseEntries);
+  addEntries(extraEntries);
+  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function withCodexStats(stats) {
+  let codexStats = null;
+  try { codexStats = getCodexStats(); } catch {}
+  if (!codexStats) return stats;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const merged = stats
+    ? { ...stats }
+    : {
+        version: 'switchboard-combined',
+        lastComputedDate: today,
+        dailyActivity: [],
+        dailyModelTokens: [],
+        modelUsage: {},
+        totalSessions: 0,
+        totalMessages: 0,
+      };
+
+  merged.modelUsage = {
+    ...(stats?.modelUsage || {}),
+    ...codexStats.modelUsage,
+  };
+  merged.dailyModelTokens = mergeDailyModelTokens(stats?.dailyModelTokens || [], codexStats.dailyModelTokens || []);
+  merged.totalSessions = Number(stats?.totalSessions || 0) + Number(codexStats.totalSessions || 0);
+  merged.codexStats = {
+    totalSessions: codexStats.totalSessions || 0,
+    totalTokens: codexStats.totalTokens || 0,
+  };
+  merged.sources = Array.from(new Set([...(stats ? (stats.sources || ['claude']) : []), 'codex']));
+  return merged;
+}
 
 function createWindow() {
   // Restore saved window bounds
@@ -509,12 +561,15 @@ ipcMain.handle('save-plan', (_event, filePath, content) => {
 // --- IPC: get-stats ---
 ipcMain.handle('get-stats', () => {
   try {
-    if (!fs.existsSync(STATS_CACHE_PATH)) return null;
-    const raw = fs.readFileSync(STATS_CACHE_PATH, 'utf8');
-    return JSON.parse(raw);
+    let stats = null;
+    if (fs.existsSync(STATS_CACHE_PATH)) {
+      const raw = fs.readFileSync(STATS_CACHE_PATH, 'utf8');
+      stats = JSON.parse(raw);
+    }
+    return withCodexStats(stats);
   } catch (err) {
     console.error('Error reading stats cache:', err);
-    return null;
+    return withCodexStats(null);
   }
 });
 
@@ -621,10 +676,10 @@ ipcMain.handle('refresh-stats', async () => {
       }
     } catch {}
 
-    return { stats, usage: usage || {} };
+    return { stats: withCodexStats(stats), usage: usage || {} };
   } catch (err) {
     log.error('Error refreshing stats:', err);
-    return { stats: null, usage: {} };
+    return { stats: withCodexStats(null), usage: {} };
   }
 });
 

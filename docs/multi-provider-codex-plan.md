@@ -58,6 +58,11 @@ Switchboard should keep Claude as the default provider while allowing sessions t
    - Codex rollout JSONL files are adapted into the message/tool shape already used by the history viewer.
    - Pi JSONL files are adapted into the same message/tool shape, including tool calls and tool results.
 
+7. Stats aggregation
+   - Claude remains the source for activity heatmap data through `~/.claude/stats-cache.json`.
+   - Codex model token totals are aggregated from `~/.codex/state_5.sqlite` and merged into `modelUsage` and `dailyModelTokens`.
+   - Codex model cards are labeled with a `Codex` prefix so they are distinguishable from Claude model cards.
+
 ## Current Limits
 
 - New Codex sessions use a temporary Switchboard id while the CLI is running because Codex owns the real session id. On process exit, Switchboard refreshes the Codex index and the persisted real session appears.

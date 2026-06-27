@@ -59,7 +59,15 @@ async function loadStats() {
     const notice = document.createElement('div');
     notice.className = 'stats-notice';
     const lastDate = stats.lastComputedDate || 'unknown';
-    notice.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-2px;margin-right:6px;flex-shrink:0"><circle cx="8" cy="8" r="7"/><line x1="8" y1="5" x2="8" y2="9"/><circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none"/></svg>Data sourced from Claude\u2019s stats cache (last updated ${escapeHtml(lastDate)}).`;
+    const sources = new Set(stats.sources || ['claude']);
+    const hasClaude = sources.has('claude');
+    const hasCodex = sources.has('codex');
+    const sourceText = hasClaude && hasCodex
+      ? `Data sourced from Claude\u2019s stats cache and Codex local state (last updated ${escapeHtml(lastDate)}).`
+      : hasCodex
+        ? `Data sourced from Codex local state (last updated ${escapeHtml(lastDate)}).`
+      : `Data sourced from Claude\u2019s stats cache (last updated ${escapeHtml(lastDate)}).`;
+    notice.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-2px;margin-right:6px;flex-shrink:0"><circle cx="8" cy="8" r="7"/><line x1="8" y1="5" x2="8" y2="9"/><circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none"/></svg>${sourceText}`;
     statsViewerBody.appendChild(notice);
   }
 }
@@ -407,6 +415,20 @@ function calculateStreak(counts) {
   return { current, longest };
 }
 
+function formatModelName(model, usage) {
+  const isCodex = usage?.provider === 'codex' || String(model || '').startsWith('codex:');
+  const rawName = String(usage?.model || model || 'unknown').replace(/^codex:/, '');
+  const cleanName = rawName
+    .replace(/^claude-/, '')
+    .replace(/-\d{8}$/, '');
+  return isCodex ? `Codex ${cleanName}` : cleanName;
+}
+
+function modelTokenTotal(usage) {
+  if (usage?.totalTokens !== undefined) return Number(usage.totalTokens || 0);
+  return Number(usage?.inputTokens || 0) + Number(usage?.outputTokens || 0);
+}
+
 function buildStatsSummary(stats, dailyMap) {
   const summaryEl = document.createElement('div');
   summaryEl.className = 'stats-summary';
@@ -436,9 +458,8 @@ function buildStatsSummary(stats, dailyMap) {
   ];
 
   for (const [model, usage] of Object.entries(models)) {
-    const shortName = model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
-    const tokens = (usage?.inputTokens || 0) + (usage?.outputTokens || 0);
-    const label = shortName;
+    const tokens = modelTokenTotal(usage);
+    const label = formatModelName(model, usage);
     // Format token count in millions/thousands
     let valueStr;
     if (tokens >= 1e9) valueStr = (tokens / 1e9).toFixed(1) + 'B';

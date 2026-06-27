@@ -78,4 +78,78 @@ function scanCodexSessions() {
   }
 }
 
-module.exports = { scanCodexSessions, stateDbPath };
+function codexModelKey(model) {
+  return 'codex:' + (String(model || '').trim() || 'unknown');
+}
+
+function getCodexStats() {
+  const dbPath = stateDbPath();
+  if (!fs.existsSync(dbPath)) return null;
+
+  let db;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const rows = db.prepare(`
+      SELECT
+        COALESCE(NULLIF(model, ''), 'unknown') AS model,
+        COALESCE(NULLIF(model_provider, ''), 'codex') AS model_provider,
+        date(COALESCE(NULLIF(updated_at_ms, 0), updated_at * 1000) / 1000, 'unixepoch') AS date,
+        COUNT(*) AS session_count,
+        SUM(COALESCE(tokens_used, 0)) AS tokens
+      FROM threads
+      WHERE archived = 0
+        AND COALESCE(tokens_used, 0) > 0
+      GROUP BY model, model_provider, date
+      ORDER BY date ASC
+    `).all();
+
+    if (!rows.length) return null;
+
+    const modelUsage = {};
+    const dailyByDate = new Map();
+    let totalSessions = 0;
+    let totalTokens = 0;
+
+    for (const row of rows) {
+      const model = row.model || 'unknown';
+      const key = codexModelKey(model);
+      const tokens = Number(row.tokens || 0);
+      const sessionCount = Number(row.session_count || 0);
+      totalSessions += sessionCount;
+      totalTokens += tokens;
+
+      if (!modelUsage[key]) {
+        modelUsage[key] = {
+          provider: 'codex',
+          model,
+          modelProvider: row.model_provider || 'codex',
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          sessionCount: 0,
+        };
+      }
+      modelUsage[key].totalTokens += tokens;
+      modelUsage[key].sessionCount += sessionCount;
+
+      if (!dailyByDate.has(row.date)) {
+        dailyByDate.set(row.date, { date: row.date, tokensByModel: {} });
+      }
+      const daily = dailyByDate.get(row.date);
+      daily.tokensByModel[key] = (daily.tokensByModel[key] || 0) + tokens;
+    }
+
+    return {
+      modelUsage,
+      dailyModelTokens: Array.from(dailyByDate.values()),
+      totalSessions,
+      totalTokens,
+    };
+  } catch {
+    return null;
+  } finally {
+    try { if (db) db.close(); } catch {}
+  }
+}
+
+module.exports = { scanCodexSessions, getCodexStats, stateDbPath };
