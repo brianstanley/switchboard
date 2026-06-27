@@ -6,6 +6,7 @@
 
 const PASSWORD_EYE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.06 12.35a11 11 0 0 1 19.88 0 11 11 0 0 1-19.88 0Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
 const PASSWORD_EYE_OFF_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 18 18"></path><path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58"></path><path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a12.04 12.04 0 0 1-4.07 5.06"></path><path d="M6.61 6.61A12.1 12.1 0 0 0 1 12a11.4 11.4 0 0 0 11 8 11 11 0 0 0 4.2-.82"></path></svg>';
+const PI_ICON = '<svg class="popover-option-icon pi-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5h10"/><path d="M9 5v14"/><path d="M15 5v14"/><path d="M5 12h14"/></svg>';
 const SESSION_LAUNCH_CONFIG_PREFIX = 'session-launch-config:';
 const SESSION_LAUNCH_CONFIG_KEYS = [
   'provider',
@@ -22,6 +23,19 @@ const SESSION_LAUNCH_CONFIG_KEYS = [
   'codexProfile',
   'codexWebSearch',
   'codexNoAltScreen',
+  'piProvider',
+  'piModel',
+  'piApiKey',
+  'piThinking',
+  'piProjectTrust',
+  'piTools',
+  'piExcludeTools',
+  'piNoBuiltinTools',
+  'piNoTools',
+  'piNoContextFiles',
+  'piNoSkills',
+  'piOffline',
+  'piSessionDir',
 ];
 
 function sessionLaunchConfigKey(sessionId) {
@@ -106,7 +120,8 @@ function showSessionSkillsDialog(session, skills = []) {
   const dialog = document.createElement('div');
   dialog.className = 'skills-dialog';
 
-  const provider = (session?.provider || 'claude') === 'codex' ? 'Codex' : 'Claude';
+  const providerId = session?.provider || 'claude';
+  const provider = providerId === 'codex' ? 'Codex' : (providerId === 'pi' ? 'Pi Mono' : 'Claude');
   const sessionName = cleanDisplayName(session?.name || session?.aiTitle || session?.summary || session?.sessionId || 'Session');
   const projectName = session?.projectPath
     ? session.projectPath.split('/').filter(Boolean).slice(-2).join('/')
@@ -174,6 +189,27 @@ async function resolveDefaultSessionOptions(project, providerId) {
     return options;
   }
 
+  if (selectedProvider === 'pi') {
+    if (effective.dangerouslySkipPermissions) {
+      options.dangerouslySkipPermissions = true;
+    }
+    if (effective.piProjectTrust) options.piProjectTrust = effective.piProjectTrust;
+    if (effective.piProvider) options.piProvider = effective.piProvider;
+    if (effective.piModel) options.piModel = effective.piModel;
+    if (effective.piApiKey) options.piApiKey = effective.piApiKey;
+    if (effective.piThinking) options.piThinking = effective.piThinking;
+    if (effective.piTools) options.piTools = effective.piTools;
+    if (effective.piExcludeTools) options.piExcludeTools = effective.piExcludeTools;
+    if (effective.piNoBuiltinTools) options.piNoBuiltinTools = true;
+    if (effective.piNoTools) options.piNoTools = true;
+    if (effective.piNoContextFiles) options.piNoContextFiles = true;
+    if (effective.piNoSkills) options.piNoSkills = true;
+    if (effective.piOffline) options.piOffline = true;
+    if (effective.piSessionDir) options.piSessionDir = effective.piSessionDir;
+    if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
+    return options;
+  }
+
   if (effective.dangerouslySkipPermissions) {
     options.dangerouslySkipPermissions = true;
   } else if (effective.permissionMode) {
@@ -192,7 +228,7 @@ async function resolveDefaultSessionOptions(project, providerId) {
 
 async function forkSession(session, project) {
   const options = await resolveDefaultSessionOptions(project, session.provider || 'claude');
-  options.forkFrom = session.sessionId;
+  options.forkFrom = (session.provider === 'pi' && session.filePath) ? session.filePath : session.sessionId;
   launchNewSession(project, options);
 }
 
@@ -271,6 +307,16 @@ function showNewSessionPopover(project, anchorEl) {
   codexOptsBtn.innerHTML = '<svg class="popover-option-icon codex-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10a37f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l-5 7 5 7"/><path d="M16 5l5 7-5 7"/><path d="M14 4l-4 16"/></svg> Codex (Configure...)';
   codexOptsBtn.onclick = () => { popover.remove(); showNewSessionDialog(project, 'codex'); };
 
+  const piBtn = document.createElement('button');
+  piBtn.className = 'popover-option';
+  piBtn.innerHTML = `${PI_ICON} Pi Mono`;
+  piBtn.onclick = async () => { popover.remove(); launchNewSession(project, await resolveDefaultSessionOptions(project, 'pi')); };
+
+  const piOptsBtn = document.createElement('button');
+  piOptsBtn.className = 'popover-option';
+  piOptsBtn.innerHTML = `${PI_ICON} Pi Mono (Configure...)`;
+  piOptsBtn.onclick = () => { popover.remove(); showNewSessionDialog(project, 'pi'); };
+
   const termBtn = document.createElement('button');
   termBtn.className = 'popover-option popover-option-terminal';
   termBtn.innerHTML = '<svg class="popover-option-icon terminal-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg> Terminal';
@@ -280,6 +326,8 @@ function showNewSessionPopover(project, anchorEl) {
   popover.appendChild(claudeOptsBtn);
   popover.appendChild(codexBtn);
   popover.appendChild(codexOptsBtn);
+  popover.appendChild(piBtn);
+  popover.appendChild(piOptsBtn);
   popover.appendChild(termBtn);
 
   // Position relative to anchor, flip upward if it would overflow
@@ -552,8 +600,270 @@ async function showCodexSessionDialog(project, session) {
   document.addEventListener('keydown', onKey);
 }
 
+async function showPiSessionDialog(project, session) {
+  const projectPath = session?.projectPath || project.projectPath;
+  const effective = session
+    ? await resolveSessionLaunchOptions(session, 'pi')
+    : await window.api.getEffectiveSettings(projectPath);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+
+  const dialog = document.createElement('div');
+  dialog.className = 'new-session-dialog';
+
+  let selectedTrust = effective.piProjectTrust || '';
+  let dangerousSkip = !!effective.dangerouslySkipPermissions && !selectedTrust;
+
+  const trustModes = [
+    { value: '', label: 'Default', desc: 'Use Pi trust config' },
+    { value: 'approve', label: 'Approve', desc: 'Trust project resources' },
+    { value: 'no-approve', label: 'No Approve', desc: 'Skip project trust approval' },
+  ];
+
+  function renderTrustGrid() {
+    return trustModes.map(m => {
+      const isSelected = !dangerousSkip && selectedTrust === m.value;
+      return `<button class="permission-option${isSelected ? ' selected' : ''}" data-trust="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
+    }).join('') +
+    `<button class="permission-option dangerous${dangerousSkip ? ' selected' : ''}" data-trust="dangerous-skip"><span class="perm-name">YOLO / Approve</span><span class="perm-desc">Launch with <code>--approve</code></span></button>`;
+  }
+
+  const isResume = !!session;
+  const isRunning = isResume && activePtyIds.has(session.sessionId);
+  const sessionName = session ? (session.name || session.aiTitle || session.summary || session.sessionId.slice(0, 8)) : '';
+  const title = isResume
+    ? `Edit Pi Config - ${escapeHtml(sessionName)}`
+    : `New Pi Session - ${escapeHtml(projectPath.split('/').filter(Boolean).slice(-2).join('/'))}`;
+  const actionHint = isResume
+    ? `<div class="launch-config-hint">${isRunning ? 'Changes are saved for future launches. Restart stops the current process and starts it again with this config.' : 'Changes are saved for this session and used the next time it resumes.'}</div>`
+    : '';
+
+  dialog.innerHTML = `
+    <h3>${title}</h3>
+    ${actionHint}
+    <div class="settings-field">
+      <div class="settings-label">Project Trust</div>
+      <div class="permission-grid" id="psd-trust-grid">${renderTrustGrid()}</div>
+    </div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Provider</span>
+        <div class="settings-description">Optional <code>--provider</code> override</div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="psd-provider" placeholder="e.g. anthropic, openai" value="${escapeHtml(effective.piProvider || '')}">
+      </div>
+    </div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Model</span>
+        <div class="settings-description">Optional <code>--model</code> override</div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="psd-model" placeholder="e.g. claude-sonnet-4-5" value="${escapeHtml(effective.piModel || '')}">
+      </div>
+    </div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">API Key</span>
+        <div class="settings-description">Passed to Pi as <code>--api-key</code> for this launch</div>
+      </div>
+      <div class="settings-field-control">
+        ${passwordField('psd-api-key', 'Use Pi default auth', effective.piApiKey || '')}
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">Thinking</span>
+        <div class="settings-description">Reasoning level passed to Pi</div>
+      </div>
+      <div class="settings-field-control">
+        <select class="settings-select" id="psd-thinking">
+          <option value="">Default</option>
+          <option value="off" ${effective.piThinking === 'off' ? 'selected' : ''}>Off</option>
+          <option value="minimal" ${effective.piThinking === 'minimal' ? 'selected' : ''}>Minimal</option>
+          <option value="low" ${effective.piThinking === 'low' ? 'selected' : ''}>Low</option>
+          <option value="medium" ${effective.piThinking === 'medium' ? 'selected' : ''}>Medium</option>
+          <option value="high" ${effective.piThinking === 'high' ? 'selected' : ''}>High</option>
+          <option value="xhigh" ${effective.piThinking === 'xhigh' ? 'selected' : ''}>X High</option>
+        </select>
+      </div>
+    </div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Tools</span>
+        <div class="settings-description">Comma-separated list for <code>--tools</code></div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="psd-tools" placeholder="read,bash,edit,write" value="${escapeHtml(effective.piTools || '')}">
+      </div>
+    </div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Exclude Tools</span>
+        <div class="settings-description">Comma-separated list for <code>--exclude-tools</code></div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="psd-exclude-tools" placeholder="bash,write" value="${escapeHtml(effective.piExcludeTools || '')}">
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">No Built-in Tools</span>
+        <div class="settings-description">Pass <code>--no-builtin-tools</code></div>
+      </div>
+      <div class="settings-field-control">
+        <label class="settings-toggle"><input type="checkbox" id="psd-no-builtin-tools" ${effective.piNoBuiltinTools ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">No Tools</span>
+        <div class="settings-description">Pass <code>--no-tools</code></div>
+      </div>
+      <div class="settings-field-control">
+        <label class="settings-toggle"><input type="checkbox" id="psd-no-tools" ${effective.piNoTools ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">No Context Files</span>
+        <div class="settings-description">Pass <code>--no-context-files</code></div>
+      </div>
+      <div class="settings-field-control">
+        <label class="settings-toggle"><input type="checkbox" id="psd-no-context-files" ${effective.piNoContextFiles ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">No Skills</span>
+        <div class="settings-description">Pass <code>--no-skills</code></div>
+      </div>
+      <div class="settings-field-control">
+        <label class="settings-toggle"><input type="checkbox" id="psd-no-skills" ${effective.piNoSkills ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">Offline</span>
+        <div class="settings-description">Pass <code>--offline</code></div>
+      </div>
+      <div class="settings-field-control">
+        <label class="settings-toggle"><input type="checkbox" id="psd-offline" ${effective.piOffline ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+      </div>
+    </div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Session Directory</span>
+        <div class="settings-description">Leave empty to use Switchboard's Pi session store</div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="psd-session-dir" placeholder="Switchboard managed" value="${escapeHtml(effective.piSessionDir || '')}">
+      </div>
+    </div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Pre-launch Command</span>
+        <div class="settings-description">Prepended to the pi command</div>
+      </div>
+      <div class="settings-field-control">
+        <input type="text" class="settings-input" id="psd-pre-launch" placeholder="e.g. mise exec node@22 --" value="${escapeHtml(effective.preLaunchCmd || '')}">
+      </div>
+    </div>
+    <div class="new-session-actions">
+      <button class="new-session-cancel-btn">Cancel</button>
+      ${isResume ? '<button class="new-session-save-btn">Save for Next Launch</button>' : ''}
+      <button class="new-session-start-btn">${isResume ? launchConfigPrimaryLabel(session) : 'Start'}</button>
+    </div>
+  `;
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  bindPasswordVisibility(dialog);
+
+  const trustGrid = dialog.querySelector('#psd-trust-grid');
+  trustGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.permission-option');
+    if (!btn) return;
+    const trust = btn.dataset.trust;
+    if (trust === 'dangerous-skip') {
+      dangerousSkip = !dangerousSkip;
+      if (dangerousSkip) selectedTrust = '';
+    } else {
+      dangerousSkip = false;
+      selectedTrust = trust;
+    }
+    trustGrid.innerHTML = renderTrustGrid();
+  });
+
+  function close() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+
+  function collectOptions() {
+    const options = {
+      provider: 'pi',
+      dangerouslySkipPermissions: !!dangerousSkip,
+      piProvider: dialog.querySelector('#psd-provider').value.trim(),
+      piModel: dialog.querySelector('#psd-model').value.trim(),
+      piApiKey: dialog.querySelector('#psd-api-key').value.trim(),
+      piThinking: dialog.querySelector('#psd-thinking').value || '',
+      piProjectTrust: dangerousSkip ? '' : (selectedTrust || ''),
+      piTools: dialog.querySelector('#psd-tools').value.trim(),
+      piExcludeTools: dialog.querySelector('#psd-exclude-tools').value.trim(),
+      piNoBuiltinTools: dialog.querySelector('#psd-no-builtin-tools').checked,
+      piNoTools: dialog.querySelector('#psd-no-tools').checked,
+      piNoContextFiles: dialog.querySelector('#psd-no-context-files').checked,
+      piNoSkills: dialog.querySelector('#psd-no-skills').checked,
+      piOffline: dialog.querySelector('#psd-offline').checked,
+      piSessionDir: dialog.querySelector('#psd-session-dir').value.trim(),
+      preLaunchCmd: dialog.querySelector('#psd-pre-launch').value.trim(),
+    };
+    if (session?.filePath) options.filePath = session.filePath;
+    return options;
+  }
+
+  async function saveOnly() {
+    const options = collectOptions();
+    await saveSessionLaunchConfig(session, options);
+    close();
+    refreshSidebar();
+  }
+
+  async function startOrResume() {
+    const options = collectOptions();
+    if (isResume) {
+      await saveSessionLaunchConfig(session, options);
+    }
+    close();
+    if (isResume) {
+      if (activePtyIds.has(session.sessionId)) {
+        restartSessionWithOptions(session, options);
+      } else {
+        openSession(session, options);
+      }
+    } else {
+      launchNewSession(project, options);
+    }
+  }
+
+  dialog.querySelector('.new-session-cancel-btn').onclick = close;
+  dialog.querySelector('.new-session-save-btn')?.addEventListener('click', saveOnly);
+  dialog.querySelector('.new-session-start-btn').onclick = startOrResume;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  function onKey(e) {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Enter' && !e.target.matches('input')) startOrResume();
+  }
+  document.addEventListener('keydown', onKey);
+}
+
 async function showNewSessionDialog(project, providerId = 'claude') {
   if (providerId === 'codex') return showCodexSessionDialog(project);
+  if (providerId === 'pi') return showPiSessionDialog(project);
 
   const effective = await window.api.getEffectiveSettings(project.projectPath);
 
@@ -703,6 +1013,9 @@ async function showNewSessionDialog(project, providerId = 'claude') {
 async function showResumeSessionDialog(session) {
   if ((session.provider || 'claude') === 'codex') {
     return showCodexSessionDialog(null, session);
+  }
+  if ((session.provider || 'claude') === 'pi') {
+    return showPiSessionDialog(null, session);
   }
 
   const effective = await resolveSessionLaunchOptions(session, 'claude');

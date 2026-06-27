@@ -103,6 +103,16 @@ function skillRootsForProvider(provider, projectPath) {
     return roots;
   }
 
+  if (provider === 'pi') {
+    roots.push({ dir: path.join(process.env.PI_CODING_AGENT_DIR || path.join(home, '.pi', 'agent'), 'skills'), source: 'Pi user' });
+    roots.push({ dir: path.join(home, '.agents', 'skills'), source: 'Agents user' });
+    if (projectPath) {
+      roots.push({ dir: path.join(projectPath, '.pi', 'skills'), source: 'Project Pi' });
+      roots.push({ dir: path.join(projectPath, '.agents', 'skills'), source: 'Project agents' });
+    }
+    return roots;
+  }
+
   roots.push({ dir: path.join(home, '.claude', 'skills'), source: 'Claude user' });
   if (projectPath) {
     roots.push({ dir: path.join(projectPath, '.claude', 'skills'), source: 'Project Claude' });
@@ -111,7 +121,7 @@ function skillRootsForProvider(provider, projectPath) {
 }
 
 function listSessionSkills({ provider = 'claude', projectPath = '' } = {}) {
-  const normalizedProvider = provider === 'codex' ? 'codex' : 'claude';
+  const normalizedProvider = provider === 'codex' || provider === 'pi' ? provider : 'claude';
   const seen = new Set();
   const skills = [];
 

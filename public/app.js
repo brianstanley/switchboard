@@ -722,7 +722,9 @@ async function launchNewSession(project, sessionOptions) {
   const provider = sessionOptions?.provider || 'claude';
   const session = {
     sessionId,
-    summary: provider === 'codex' ? 'New Codex session' : 'New session',
+    summary: provider === 'codex'
+      ? 'New Codex session'
+      : (provider === 'pi' ? 'New Pi session' : 'New session'),
     firstPrompt: '',
     projectPath,
     provider,
@@ -820,6 +822,9 @@ async function openSession(session, customOptions) {
   // Open terminal in main process
   const resumeOptions = customOptions || await resolveSessionLaunchOptions(session, session.provider || 'claude');
   if (!resumeOptions.provider) resumeOptions.provider = session.provider || 'claude';
+  if ((session.provider || 'claude') === 'pi' && session.filePath && !resumeOptions.filePath) {
+    resumeOptions.filePath = session.filePath;
+  }
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);

@@ -75,6 +75,20 @@
     const codexApprovalValue = fieldValue('codexApprovalPolicy', '');
     const codexWebSearchValue = fieldValue('codexWebSearch', false);
     const codexNoAltScreenValue = fieldValue('codexNoAltScreen', true);
+    const piProviderValue = fieldValue('piProvider', '');
+    const piModelValue = fieldValue('piModel', '');
+    const piApiKeyValue = fieldValue('piApiKey', '');
+    const piThinkingValue = fieldValue('piThinking', '');
+    const piProjectTrustValue = fieldValue('piProjectTrust', '');
+    const piToolsValue = fieldValue('piTools', '');
+    const piExcludeToolsValue = fieldValue('piExcludeTools', '');
+    const piNoBuiltinToolsValue = fieldValue('piNoBuiltinTools', false);
+    const piNoToolsValue = fieldValue('piNoTools', false);
+    const piNoContextFilesValue = fieldValue('piNoContextFiles', false);
+    const piNoSkillsValue = fieldValue('piNoSkills', false);
+    const piOfflineValue = fieldValue('piOffline', false);
+    const piSessionDirValue = fieldValue('piSessionDir', '');
+    const piIndexExternalSessionsValue = fieldValue('piIndexExternalSessions', false);
     const preLaunchValue = fieldValue('preLaunchCmd', '');
     const addDirsValue = fieldValue('addDirs', '');
     const visCountValue = fieldValue('visibleSessionCount', 10);
@@ -257,6 +271,201 @@
       </div>
 
       <div class="settings-section">
+        <div class="settings-section-title">Pi Mono CLI Options</div>
+
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Provider</span>
+              ${useGlobalCheckbox('piProvider')}
+            </div>
+            <div class="settings-description">Optional <code>--provider</code> override for Pi</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="text" class="settings-input" id="sv-pi-provider" placeholder="e.g. anthropic, openai" value="${escapeHtml(piProviderValue)}" ${fieldDisabled('piProvider')}>
+          </div>
+        </div>
+
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Model</span>
+              ${useGlobalCheckbox('piModel')}
+            </div>
+            <div class="settings-description">Optional <code>--model</code> override for Pi</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="text" class="settings-input" id="sv-pi-model" placeholder="e.g. claude-sonnet-4-5" value="${escapeHtml(piModelValue)}" ${fieldDisabled('piModel')}>
+          </div>
+        </div>
+
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">API Key</span>
+              ${useGlobalCheckbox('piApiKey')}
+            </div>
+            <div class="settings-description">Optional <code>--api-key</code> override for Pi</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="password" class="settings-input" id="sv-pi-api-key" placeholder="Use Pi default auth" value="${escapeHtml(piApiKeyValue)}" ${fieldDisabled('piApiKey')} autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Thinking</span>
+              ${useGlobalCheckbox('piThinking')}
+            </div>
+            <div class="settings-description">Pi reasoning level</div>
+          </div>
+          <div class="settings-field-control">
+            <select class="settings-select" id="sv-pi-thinking" ${fieldDisabled('piThinking')}>
+              <option value="">Default</option>
+              <option value="off" ${piThinkingValue === 'off' ? 'selected' : ''}>Off</option>
+              <option value="minimal" ${piThinkingValue === 'minimal' ? 'selected' : ''}>Minimal</option>
+              <option value="low" ${piThinkingValue === 'low' ? 'selected' : ''}>Low</option>
+              <option value="medium" ${piThinkingValue === 'medium' ? 'selected' : ''}>Medium</option>
+              <option value="high" ${piThinkingValue === 'high' ? 'selected' : ''}>High</option>
+              <option value="xhigh" ${piThinkingValue === 'xhigh' ? 'selected' : ''}>X High</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Project Trust</span>
+              ${useGlobalCheckbox('piProjectTrust')}
+            </div>
+            <div class="settings-description">Pi project trust flag</div>
+          </div>
+          <div class="settings-field-control">
+            <select class="settings-select" id="sv-pi-trust" ${fieldDisabled('piProjectTrust')}>
+              <option value="">Default</option>
+              <option value="approve" ${piProjectTrustValue === 'approve' ? 'selected' : ''}>Approve</option>
+              <option value="no-approve" ${piProjectTrustValue === 'no-approve' ? 'selected' : ''}>No Approve</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Tools</span>
+              ${useGlobalCheckbox('piTools')}
+            </div>
+            <div class="settings-description">Comma-separated list for <code>--tools</code></div>
+          </div>
+          <div class="settings-field-control">
+            <input type="text" class="settings-input" id="sv-pi-tools" placeholder="read,bash,edit,write" value="${escapeHtml(piToolsValue)}" ${fieldDisabled('piTools')}>
+          </div>
+        </div>
+
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Exclude Tools</span>
+              ${useGlobalCheckbox('piExcludeTools')}
+            </div>
+            <div class="settings-description">Comma-separated list for <code>--exclude-tools</code></div>
+          </div>
+          <div class="settings-field-control">
+            <input type="text" class="settings-input" id="sv-pi-exclude-tools" placeholder="bash,write" value="${escapeHtml(piExcludeToolsValue)}" ${fieldDisabled('piExcludeTools')}>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">No Built-in Tools</span>
+              ${useGlobalCheckbox('piNoBuiltinTools')}
+            </div>
+            <div class="settings-description">Pass <code>--no-builtin-tools</code></div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-pi-no-builtin-tools" ${piNoBuiltinToolsValue ? 'checked' : ''} ${fieldDisabled('piNoBuiltinTools')}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">No Tools</span>
+              ${useGlobalCheckbox('piNoTools')}
+            </div>
+            <div class="settings-description">Pass <code>--no-tools</code></div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-pi-no-tools" ${piNoToolsValue ? 'checked' : ''} ${fieldDisabled('piNoTools')}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">No Context Files</span>
+              ${useGlobalCheckbox('piNoContextFiles')}
+            </div>
+            <div class="settings-description">Pass <code>--no-context-files</code></div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-pi-no-context-files" ${piNoContextFilesValue ? 'checked' : ''} ${fieldDisabled('piNoContextFiles')}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">No Skills</span>
+              ${useGlobalCheckbox('piNoSkills')}
+            </div>
+            <div class="settings-description">Pass <code>--no-skills</code></div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-pi-no-skills" ${piNoSkillsValue ? 'checked' : ''} ${fieldDisabled('piNoSkills')}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Offline</span>
+              ${useGlobalCheckbox('piOffline')}
+            </div>
+            <div class="settings-description">Pass <code>--offline</code></div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-pi-offline" ${piOfflineValue ? 'checked' : ''} ${fieldDisabled('piOffline')}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-field settings-field-wide">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Session Directory</span>
+              ${useGlobalCheckbox('piSessionDir')}
+            </div>
+            <div class="settings-description">Leave empty to use Switchboard's Pi session store</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="text" class="settings-input" id="sv-pi-session-dir" placeholder="Switchboard managed" value="${escapeHtml(piSessionDirValue)}" ${fieldDisabled('piSessionDir')}>
+          </div>
+        </div>
+
+        ${!isProject ? `<div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">External Pi History</span>
+            <div class="settings-description">Also index existing sessions from <code>~/.pi/agent/sessions</code></div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-pi-index-external" ${piIndexExternalSessionsValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>` : ''}
+      </div>
+
+      <div class="settings-section">
         <div class="settings-section-title">Session Launch</div>
 
         <div class="settings-field">
@@ -271,6 +480,7 @@
             <select class="settings-select" id="sv-default-provider" ${fieldDisabled('defaultProvider')}>
               <option value="claude" ${defaultProviderValue === 'claude' ? 'selected' : ''}>Claude</option>
               <option value="codex" ${defaultProviderValue === 'codex' ? 'selected' : ''}>Codex</option>
+              <option value="pi" ${defaultProviderValue === 'pi' ? 'selected' : ''}>Pi Mono</option>
             </select>
           </div>
         </div>
@@ -403,6 +613,19 @@
           codexApprovalPolicy: 'sv-codex-approval',
           codexWebSearch: 'sv-codex-web-search',
           codexNoAltScreen: 'sv-codex-no-alt',
+          piProvider: 'sv-pi-provider',
+          piModel: 'sv-pi-model',
+          piApiKey: 'sv-pi-api-key',
+          piThinking: 'sv-pi-thinking',
+          piProjectTrust: 'sv-pi-trust',
+          piTools: 'sv-pi-tools',
+          piExcludeTools: 'sv-pi-exclude-tools',
+          piNoBuiltinTools: 'sv-pi-no-builtin-tools',
+          piNoTools: 'sv-pi-no-tools',
+          piNoContextFiles: 'sv-pi-no-context-files',
+          piNoSkills: 'sv-pi-no-skills',
+          piOffline: 'sv-pi-offline',
+          piSessionDir: 'sv-pi-session-dir',
           preLaunchCmd: 'sv-pre-launch',
           addDirs: 'sv-add-dirs',
         };
@@ -433,6 +656,19 @@
               codexApprovalPolicy: () => settingsViewerBody.querySelector('#sv-codex-approval').value || null,
               codexWebSearch: () => settingsViewerBody.querySelector('#sv-codex-web-search').checked,
               codexNoAltScreen: () => settingsViewerBody.querySelector('#sv-codex-no-alt').checked,
+              piProvider: () => settingsViewerBody.querySelector('#sv-pi-provider').value.trim(),
+              piModel: () => settingsViewerBody.querySelector('#sv-pi-model').value.trim(),
+              piApiKey: () => settingsViewerBody.querySelector('#sv-pi-api-key').value.trim(),
+              piThinking: () => settingsViewerBody.querySelector('#sv-pi-thinking').value || null,
+              piProjectTrust: () => settingsViewerBody.querySelector('#sv-pi-trust').value || null,
+              piTools: () => settingsViewerBody.querySelector('#sv-pi-tools').value.trim(),
+              piExcludeTools: () => settingsViewerBody.querySelector('#sv-pi-exclude-tools').value.trim(),
+              piNoBuiltinTools: () => settingsViewerBody.querySelector('#sv-pi-no-builtin-tools').checked,
+              piNoTools: () => settingsViewerBody.querySelector('#sv-pi-no-tools').checked,
+              piNoContextFiles: () => settingsViewerBody.querySelector('#sv-pi-no-context-files').checked,
+              piNoSkills: () => settingsViewerBody.querySelector('#sv-pi-no-skills').checked,
+              piOffline: () => settingsViewerBody.querySelector('#sv-pi-offline').checked,
+              piSessionDir: () => settingsViewerBody.querySelector('#sv-pi-session-dir').value.trim(),
               preLaunchCmd: () => settingsViewerBody.querySelector('#sv-pre-launch').value.trim(),
               addDirs: () => settingsViewerBody.querySelector('#sv-add-dirs').value.trim(),
             };
@@ -452,6 +688,20 @@
         settings.codexApprovalPolicy = settingsViewerBody.querySelector('#sv-codex-approval').value || null;
         settings.codexWebSearch = settingsViewerBody.querySelector('#sv-codex-web-search').checked;
         settings.codexNoAltScreen = settingsViewerBody.querySelector('#sv-codex-no-alt').checked;
+        settings.piProvider = settingsViewerBody.querySelector('#sv-pi-provider').value.trim();
+        settings.piModel = settingsViewerBody.querySelector('#sv-pi-model').value.trim();
+        settings.piApiKey = settingsViewerBody.querySelector('#sv-pi-api-key').value.trim();
+        settings.piThinking = settingsViewerBody.querySelector('#sv-pi-thinking').value || null;
+        settings.piProjectTrust = settingsViewerBody.querySelector('#sv-pi-trust').value || null;
+        settings.piTools = settingsViewerBody.querySelector('#sv-pi-tools').value.trim();
+        settings.piExcludeTools = settingsViewerBody.querySelector('#sv-pi-exclude-tools').value.trim();
+        settings.piNoBuiltinTools = settingsViewerBody.querySelector('#sv-pi-no-builtin-tools').checked;
+        settings.piNoTools = settingsViewerBody.querySelector('#sv-pi-no-tools').checked;
+        settings.piNoContextFiles = settingsViewerBody.querySelector('#sv-pi-no-context-files').checked;
+        settings.piNoSkills = settingsViewerBody.querySelector('#sv-pi-no-skills').checked;
+        settings.piOffline = settingsViewerBody.querySelector('#sv-pi-offline').checked;
+        settings.piSessionDir = settingsViewerBody.querySelector('#sv-pi-session-dir').value.trim();
+        settings.piIndexExternalSessions = settingsViewerBody.querySelector('#sv-pi-index-external').checked;
         settings.preLaunchCmd = settingsViewerBody.querySelector('#sv-pre-launch').value.trim();
         settings.addDirs = settingsViewerBody.querySelector('#sv-add-dirs').value.trim();
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10;

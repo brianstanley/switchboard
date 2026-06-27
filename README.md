@@ -1,17 +1,17 @@
 # Switchboard
 
-Your command center for Claude Code and Codex sessions.
+Your command center for Claude Code, Codex, and Pi Mono sessions.
 
 Switchboard is a desktop app that gives you a unified view of all your agent sessions across every project. Launch, resume, fork, and monitor sessions from a single window — no more juggling terminal tabs or digging through local history files to find that one conversation from last week.
 
-> This fork adds multi-provider support on top of the original Switchboard app, starting with **Claude Code** and **Codex**.
+> This fork adds multi-provider support on top of the original Switchboard app, including **Claude Code**, **Codex**, and **Pi Mono**.
 
 ![Switchboard](build/screenshot.png)
 
 ### Key Features
 
 - **Session Browser** — All your agent sessions, organized by project, searchable by content
-- **Multi-Provider Launching** — Start new sessions with Claude Code or Codex from the same project sidebar
+- **Multi-Provider Launching** — Start new sessions with Claude Code, Codex, or Pi Mono from the same project sidebar
 - **Built-in Terminal** — Connect to running sessions or launch new ones without leaving the app
 - **Status Notifications** — In-app alerts when a session is waiting for permission approval or user input
 - **Fork & Resume** — Branch off from any point in a session's history
@@ -50,6 +50,38 @@ Supported Codex launch options:
 - pre-launch command
 
 Codex session history is read from the local Codex state database and rollout files, then shown in the same sidebar/history views as Claude sessions.
+
+## Pi Mono Support
+
+This fork can also launch and index Pi Mono sessions.
+
+### Requirements
+
+- Install and authenticate the `pi` CLI.
+- Pi's current npm package requires Node.js 22.19.0 or newer. If your default shell uses Node 20, set a pre-launch command such as `mise exec node@22 --`.
+
+### Launching Pi Mono
+
+Use the `+` button on a project and choose:
+
+- **Pi Mono** — launch with the saved/default Pi settings.
+- **Pi Mono (Configure...)** — override launch settings for this session only.
+
+Supported Pi launch options:
+
+- provider (`--provider`)
+- model (`--model`)
+- API key (`--api-key`)
+- thinking level (`--thinking`)
+- project trust / YOLO (`--approve` / `--no-approve`)
+- tools and excluded tools (`--tools`, `--exclude-tools`)
+- no built-in tools, no tools, no context files, no skills
+- offline mode (`--offline`)
+- session directory (`--session-dir`)
+- optional external Pi history indexing
+- pre-launch command
+
+By default, Pi sessions launched from Switchboard are stored under Switchboard's own data directory and indexed from there. If you want to import sessions created outside Switchboard, enable **External Pi History** in Global Settings to also read `~/.pi/agent/sessions`.
 
 ### Claude Per-Session API Key
 
@@ -100,7 +132,7 @@ Switchboard monitors all your sessions in the background and shows status indica
 
 ## Download
 
-This fork does not currently publish packaged release artifacts. The original upstream DMG/installer does **not** include the Codex support from this fork.
+This fork does not currently publish packaged release artifacts. The original upstream DMG/installer does **not** include the Codex or Pi Mono support from this fork.
 
 To try this fork today, run it from source:
 
@@ -123,6 +155,7 @@ Upstream releases are available at [doctly/switchboard](https://github.com/doctl
 - **npm** 10+
 - **Claude Code CLI** for Claude sessions
 - **Codex CLI** for Codex sessions
+- **Pi Mono CLI** for Pi sessions
 - Platform build tools for native modules:
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
   - **Linux**: `build-essential`, `python3` (`sudo apt install build-essential python3`)
@@ -203,6 +236,7 @@ preload.js         Context bridge (IPC bindings)
 db.js              SQLite session cache & metadata
 providers/         Provider-specific launch command builders
 codex-*.js         Codex session discovery and log adaptation
+pi-*.js            Pi session discovery and log adaptation
 public/            Renderer (HTML/CSS/JS)
 scripts/           Build & postinstall scripts
 build/             Icons, entitlements, builder resources

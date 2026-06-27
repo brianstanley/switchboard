@@ -42,6 +42,7 @@ const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { getProvider, getProviderMeta } = require('./providers');
 const { adaptCodexRollout } = require('./codex-log-adapter');
+const { adaptPiSession } = require('./pi-log-adapter');
 const { listSessionSkills } = require('./skill-scanner');
 
 
@@ -81,13 +82,14 @@ const {
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
-  closeDb,
+  closeDb, DATA_DIR,
 } = require('./db');
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
+const PI_SESSIONS_DIR = path.join(DATA_DIR, 'pi-sessions');
 const MAX_BUFFER_SIZE = 256 * 1024;
 
 // Active PTY sessions
@@ -270,6 +272,7 @@ const { deriveProjectPath } = require('./derive-project-path');
 const sessionCache = require('./session-cache');
 sessionCache.init({
   PROJECTS_DIR,
+  PI_SESSIONS_DIR,
   activeSessions,
   getMainWindow: () => mainWindow,
   log,
@@ -281,7 +284,7 @@ sessionCache.init({
   },
 });
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
-        refreshCodexSessions, buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus,
+        refreshCodexSessions, refreshPiSessions, buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus,
         populateCacheViaWorker } = sessionCache;
 
 
@@ -839,6 +842,20 @@ const SETTING_DEFAULTS = {
   codexApprovalPolicy: '',
   codexWebSearch: false,
   codexNoAltScreen: true,
+  piProvider: '',
+  piModel: '',
+  piApiKey: '',
+  piThinking: '',
+  piProjectTrust: '',
+  piTools: '',
+  piExcludeTools: '',
+  piNoBuiltinTools: false,
+  piNoTools: false,
+  piNoContextFiles: false,
+  piNoSkills: false,
+  piOffline: false,
+  piSessionDir: '',
+  piIndexExternalSessions: false,
   preLaunchCmd: '',
   addDirs: '',
   visibleSessionCount: 5,
@@ -920,13 +937,16 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   const cached = getCachedSession(sessionId);
   if (!cached) return { error: 'Session not found in cache' };
   const provider = cached.provider || 'claude';
-  const jsonlPath = provider === 'codex' && cached.filePath
+  const jsonlPath = (provider === 'codex' || provider === 'pi') && cached.filePath
     ? cached.filePath
     : path.join(PROJECTS_DIR, cached.folder, sessionId + '.jsonl');
   try {
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     if (provider === 'codex') {
       return { entries: adaptCodexRollout(content), provider };
+    }
+    if (provider === 'pi') {
+      return { entries: adaptPiSession(content), provider };
     }
     const entries = [];
     for (const line of content.split('\n')) {
@@ -978,6 +998,7 @@ ipcMain.handle('delete-session', (_event, sessionId) => {
     deleteSearchSession(sessionId);
     deleteSessionMeta(sessionId);
     if (cached?.provider === 'codex') refreshCodexSessions({ force: true });
+    if (cached?.provider === 'pi') refreshPiSessions({ force: true });
     notifyRendererProjectsChanged();
     return { ok: true };
   } catch (err) {
@@ -1082,6 +1103,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
   let ptyProcess;
   let mcpServer = null;
+  let effectiveProviderOptions = sessionOptions || {};
   try {
     if (isPlainTerminal) {
       // Plain terminal: interactive login shell, no claude command
@@ -1111,6 +1133,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       }, 300);
     } else {
       const providerOptions = { ...(sessionOptions || {}) };
+      if (providerId === 'pi' && !providerOptions.piSessionDir) {
+        providerOptions.piSessionDir = PI_SESSIONS_DIR;
+      }
+      if (providerId === 'pi' && providerOptions.piSessionDir) {
+        try { fs.mkdirSync(providerOptions.piSessionDir, { recursive: true }); } catch {}
+      }
+      effectiveProviderOptions = providerOptions;
 
       // Start MCP server for providers that can send diffs/file opens to Switchboard.
       if (provider?.meta?.supportsMcp && providerOptions.mcpEmulation !== false) {
@@ -1162,6 +1191,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     projectPath, firstResize: true,
     projectFolder, knownJsonlFiles, sessionSlug,
     provider: providerId,
+    piSessionDir: providerId === 'pi' ? (effectiveProviderOptions?.piSessionDir || null) : null,
     isPlainTerminal, forkFrom: sessionOptions?.forkFrom || null,
     mcpServer, _openedAt: Date.now(),
   };
@@ -1277,8 +1307,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     activeSessions.delete(realId);
     // Clean up the original key too in case transition detection hasn't run yet
     activeSessions.delete(sessionId);
-    if (session.provider === 'codex') {
-      refreshCodexSessions({ force: true });
+    if (session.provider === 'codex' || session.provider === 'pi') {
+      if (session.provider === 'codex') refreshCodexSessions({ force: true });
+      if (session.provider === 'pi') refreshPiSessions({ force: true });
       notifyRendererProjectsChanged();
     }
   });

@@ -956,6 +956,12 @@ function buildSessionItem(session) {
     badge.dataset.tooltip = 'Codex';
     badge.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l-5 7 5 7"/><path d="M16 5l5 7-5 7"/><path d="M14 4l-4 16"/></svg>';
     summaryEl.prepend(badge);
+  } else if (session.provider === 'pi') {
+    const badge = document.createElement('span');
+    badge.className = 'provider-badge pi-badge';
+    badge.dataset.tooltip = 'Pi Mono';
+    badge.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5h10"/><path d="M9 5v14"/><path d="M15 5v14"/><path d="M5 12h14"/></svg>';
+    summaryEl.prepend(badge);
   }
   info.appendChild(summaryEl);
   info.appendChild(idEl);

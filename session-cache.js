@@ -6,20 +6,23 @@ const { deriveProjectPath } = require('./derive-project-path');
 const { readSessionFile } = require('./read-session-file');
 const { encodeProjectPath } = require('./encode-project-path');
 const { scanCodexSessions } = require('./codex-session-scanner');
+const { scanPiSessions, piSessionsDir, expandHome } = require('./pi-session-scanner');
 
 /**
  * Session cache module.
  * Call init(ctx) once with the shared context object.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log;
+let PROJECTS_DIR, PI_SESSIONS_DIR, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
 let getCachedByProvider, deleteCachedProvider;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
 let lastCodexScanAt = 0;
+let lastPiScanAt = 0;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
+  PI_SESSIONS_DIR = ctx.PI_SESSIONS_DIR;
   activeSessions = ctx.activeSessions;
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
@@ -169,37 +172,41 @@ function populateCacheFromFilesystem() {
       refreshFolder(folder);
     }
     refreshCodexSessions({ force: true });
+    refreshPiSessions({ force: true });
   } catch (err) {
     console.error('Error populating cache:', err);
   }
 }
 
-function refreshCodexSessions({ force = false } = {}) {
+function refreshProviderSessions(provider, scanFn, scanState, label) {
   const now = Date.now();
-  if (!force && now - lastCodexScanAt < 5000) return false;
-  lastCodexScanAt = now;
+  if (!scanState.force && now - scanState.lastScanAt < 5000) return false;
+  scanState.setLastScanAt(now);
 
   let sessions;
   try {
-    sessions = scanCodexSessions();
+    sessions = scanFn();
   } catch (err) {
-    if (log) log.warn(`[codex] scan failed: ${err.message}`);
+    if (log) log.warn(`[${label}] scan failed: ${err.message}`);
     return false;
   }
 
-  const previous = getCachedByProvider ? getCachedByProvider('codex').map(row => row.sessionId) : [];
+  const previous = getCachedByProvider ? getCachedByProvider(provider).map(row => row.sessionId) : [];
   const currentIds = new Set(sessions.map(s => s.sessionId));
   const changed = sessions.length > 0 || previous.length > 0;
 
-  if (deleteCachedProvider) deleteCachedProvider('codex');
+  if (deleteCachedProvider) deleteCachedProvider(provider);
   for (const sessionId of previous) {
     deleteSearchSession(sessionId);
   }
 
   if (sessions.length > 0) {
     upsertCachedSessions(sessions);
+    for (const s of sessions) {
+      if (s.customTitle) setName(s.sessionId, s.customTitle);
+    }
     upsertSearchEntries(sessions.map(s => {
-      const name = getMeta(s.sessionId)?.name || s.aiTitle || '';
+      const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
       return {
         id: s.sessionId,
         type: 'session',
@@ -213,9 +220,52 @@ function refreshCodexSessions({ force = false } = {}) {
   return changed || currentIds.size > 0;
 }
 
+function refreshCodexSessions({ force = false } = {}) {
+  return refreshProviderSessions('codex', scanCodexSessions, {
+    force,
+    lastScanAt: lastCodexScanAt,
+    setLastScanAt: (value) => { lastCodexScanAt = value; },
+  }, 'codex');
+}
+
+function getPiSessionRoots() {
+  const roots = new Set();
+  function addRoot(value) {
+    const root = expandHome(value);
+    if (root) roots.add(root);
+  }
+
+  try {
+    const global = getSetting('global') || {};
+    addRoot(PI_SESSIONS_DIR);
+    if (global.piIndexExternalSessions || process.env.SWITCHBOARD_PI_INDEX_EXTERNAL === '1') {
+      addRoot(piSessionsDir());
+    }
+    addRoot(global.piSessionDir);
+    for (const row of getAllCached()) {
+      if (!row.projectPath) continue;
+      addRoot((getSetting('project:' + row.projectPath) || {}).piSessionDir);
+    }
+    for (const [, session] of activeSessions) {
+      if (session.provider === 'pi') addRoot(session.piSessionDir);
+    }
+  } catch {}
+
+  return Array.from(roots);
+}
+
+function refreshPiSessions({ force = false } = {}) {
+  return refreshProviderSessions('pi', () => scanPiSessions({ roots: getPiSessionRoots() }), {
+    force,
+    lastScanAt: lastPiScanAt,
+    setLastScanAt: (value) => { lastPiScanAt = value; },
+  }, 'pi');
+}
+
 /** Build projects response from cached data */
 function buildProjectsFromCache(showArchived) {
   refreshCodexSessions();
+  refreshPiSessions();
 
   const metaMap = getAllMeta();
   const cachedRows = getAllCached();
@@ -329,7 +379,9 @@ function buildProjectsFromCache(showArchived) {
     if (!proj.sessions.some(s => s.sessionId === sessionId)) {
       proj.sessions.push({
         sessionId,
-        summary: session.provider === 'codex' ? 'New Codex session' : 'New session',
+        summary: session.provider === 'codex'
+          ? 'New Codex session'
+          : (session.provider === 'pi' ? 'New Pi session' : 'New session'),
         firstPrompt: '',
         projectPath: session.projectPath,
         provider: session.provider || 'claude',
@@ -434,6 +486,7 @@ function populateCacheViaWorker() {
     populatingCache = false;
     sendStatus(`Indexed ${sessionCount} sessions across ${msg.results.length} projects`, 'done');
     refreshCodexSessions({ force: true });
+    refreshPiSessions({ force: true });
     // Clear status after a few seconds
     setTimeout(() => sendStatus(''), 5000);
     notifyRendererProjectsChanged();
@@ -466,6 +519,7 @@ module.exports = {
   refreshFolder,
   populateCacheFromFilesystem,
   refreshCodexSessions,
+  refreshPiSessions,
   buildProjectsFromCache,
   notifyRendererProjectsChanged,
   sendStatus,

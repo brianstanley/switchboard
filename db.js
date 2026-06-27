@@ -405,6 +405,7 @@ function closeDb() {
 }
 
 module.exports = {
+  DATA_DIR, DB_PATH,
   getMeta, getAllMeta, setName, toggleStar, setArchived, deleteSessionMeta,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, getCachedByProvider, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder, deleteCachedProvider,

@@ -3771,6 +3771,10 @@ body { display: flex; flex-direction: column; }
   border-radius: 3px;
 }
 
+.popover-option-icon.pi-icon {
+  color: #8b5cf6;
+}
+
 .popover-option-terminal .popover-option-icon,
 .terminal-icon {
   color: #3ecf5a;
@@ -3802,6 +3806,10 @@ body { display: flex; flex-direction: column; }
 
 .codex-badge {
   color: #10a37f;
+}
+
+.pi-badge {
+  color: #8b5cf6;
 }
 
 /* Terminal sessions: green status dot */
