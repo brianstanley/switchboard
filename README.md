@@ -18,7 +18,7 @@ Switchboard is a desktop app that gives you a unified view of all your agent ses
 - **Full-Text Search** — Find any session by what was discussed, not just when it happened
 - **IDE Emulation** — Switchboard acts as an IDE for Claude CLI, showing file diffs and opens in a side panel where you can accept, reject, or edit changes before they're applied. Supports both inline and side-by-side diff views. Disable this in Global Settings if you prefer Claude to use your own editor (VS Code, Cursor, etc.)
 - **Plans & Memory** — Browse and edit your plan files and CLAUDE.md memory in one place
-- **Activity Stats** — Heatmap of your coding activity across all projects
+- **Activity Stats** — Heatmap and model token summaries across Claude and Codex local history
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
 
 ## Codex Support
@@ -51,14 +51,27 @@ Supported Codex launch options:
 
 Codex session history is read from the local Codex state database and rollout files, then shown in the same sidebar/history views as Claude sessions.
 
+Codex model token totals are also merged into the Stats view from the local Codex state database, so model cards include entries such as `Codex gpt-5.5` alongside Claude models.
+
 ## Pi Mono Support
 
 This fork can also launch and index Pi Mono sessions.
 
 ### Requirements
 
-- Install and authenticate the `pi` CLI.
-- Pi's current npm package requires Node.js 22.19.0 or newer. If your default shell uses Node 20, set a pre-launch command such as `mise exec node@22 --`.
+- Install the `pi` CLI with a Node.js runtime supported by Pi.
+- Pi's current npm package requires Node.js 22.19.0 or newer. If your default shell uses Node 20, either launch Pi through a wrapper that puts Node 22+ first in `PATH`, or set a pre-launch command such as `mise exec node@22 --`.
+- Authenticate Pi with `/login`, or provide a provider/model/API key override from Switchboard's Pi configure dialog.
+
+Example install with a Node 22+ shell:
+
+```bash
+npm install -g @earendil-works/pi-coding-agent@latest
+pi --version
+pi
+```
+
+Inside Pi, run `/login` and configure a provider/model. If Pi prints `No models available`, Switchboard can launch it, but Pi still needs auth/model configuration.
 
 ### Launching Pi Mono
 
@@ -81,7 +94,41 @@ Supported Pi launch options:
 - optional external Pi history indexing
 - pre-launch command
 
-By default, Pi sessions launched from Switchboard are stored under Switchboard's own data directory and indexed from there. If you want to import sessions created outside Switchboard, enable **External Pi History** in Global Settings to also read `~/.pi/agent/sessions`.
+### Configuring Pi Mono
+
+There are two supported auth/config paths:
+
+- Use Pi's own login: run `pi` in a normal terminal, complete `/login`, then leave **API Key** empty in Switchboard.
+- Override per launch: choose **Pi Mono (Configure...)** and set **Provider**, **Model**, and optionally **API Key** for that session.
+
+Useful fields:
+
+- **Project Trust** maps to `--approve` / `--no-approve`. The global dangerous/YOLO setting maps to `--approve` for Pi.
+- **Session Directory** should usually stay empty. Empty means Switchboard stores Pi sessions in its own data directory and indexes only those sessions.
+- **External Pi History** is a Global Settings toggle. Enable it only if you want to import sessions created outside Switchboard from `~/.pi/agent/sessions`.
+- **Pre-launch Command** is useful when `pi` needs a specific Node runtime, for example `mise exec node@22 --`.
+
+By default, Pi sessions launched from Switchboard are stored under Switchboard's own data directory and indexed from there:
+
+- source/dev runs: `~/.switchboard-dev/pi-sessions`
+- packaged app runs: `~/.switchboard/pi-sessions`
+- custom data dir: `$SWITCHBOARD_DATA_DIR/pi-sessions`
+
+This default avoids pulling unrelated Pi benchmark/test sessions into the sidebar. To import external Pi history, enable **External Pi History** in Global Settings or configure an explicit Pi session directory.
+
+### Troubleshooting Pi Mono
+
+If a Pi session opens and closes immediately, check these first:
+
+```bash
+which pi
+pi --version
+pi --no-session --no-skills --no-context-files --offline
+```
+
+- `pi: command not found` means the Electron-launched shell cannot find the Pi CLI. Add a wrapper directory to `PATH` or use **Pre-launch Command**.
+- A Node engine error means Pi is running under an older Node. Use Node 22.19.0 or newer.
+- `No models available` means Pi started correctly, but no provider/model is configured. Run `/login` in Pi or set provider/model/API key in **Pi Mono (Configure...)**.
 
 ### Claude Per-Session API Key
 
