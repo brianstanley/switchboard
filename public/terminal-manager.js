@@ -132,6 +132,63 @@ const ESC_SYNC_END = '\x1b[?2026l';
 const SYNC_BUFFER_TIMEOUT = 500; // max ms to hold data waiting for sync end
 const terminalWriteBuffers = new Map(); // sessionId → { chunks, syncDepth, rafId, timerId }
 
+const TERMINAL_LOCAL_FILE_RE = /(^|[\s(["'])((?:~\/|\/|[A-Za-z]:[\\/])(?:[^\s"'<>`|)]+?\.(?:html?|mdx?|markdown|json|txt|log|csv|xml|svg|css|jsx?|tsx?|py|ya?ml)))/gi;
+
+function openTerminalFilePath(sessionId, filePath) {
+  if (!filePath || typeof openFileInPanel !== 'function') return;
+  openFileInPanel(sessionId, filePath);
+}
+
+function openTerminalFileUri(sessionId, uri) {
+  try {
+    const url = new URL(uri);
+    let filePath = decodeURIComponent(url.pathname);
+    if (/^\/[A-Za-z]:\//.test(filePath)) filePath = filePath.slice(1);
+    openTerminalFilePath(sessionId, filePath);
+  } catch {
+    // Ignore malformed terminal hyperlinks.
+  }
+}
+
+function findTerminalLocalFileLinks(lineText, bufferLineNumber, sessionId) {
+  const links = [];
+  const regex = new RegExp(TERMINAL_LOCAL_FILE_RE.source, TERMINAL_LOCAL_FILE_RE.flags);
+  let match;
+
+  while ((match = regex.exec(lineText)) !== null) {
+    const filePath = match[2];
+    const startIndex = match.index + match[1].length;
+    const endIndex = startIndex + filePath.length;
+
+    links.push({
+      range: {
+        start: { x: startIndex + 1, y: bufferLineNumber },
+        end: { x: endIndex, y: bufferLineNumber },
+      },
+      text: filePath,
+      activate: () => openTerminalFilePath(sessionId, filePath),
+    });
+  }
+
+  return links;
+}
+
+function registerLocalFileLinkProvider(terminal, sessionId) {
+  terminal.registerLinkProvider({
+    provideLinks(bufferLineNumber, callback) {
+      const line = terminal.buffer.active.getLine(bufferLineNumber - 1);
+      if (!line) {
+        callback(undefined);
+        return;
+      }
+
+      const lineText = line.translateToString(true);
+      const links = findTerminalLocalFileLinks(lineText, bufferLineNumber, sessionId);
+      callback(links.length ? links : undefined);
+    },
+  });
+}
+
 function flushTerminalBuffer(sessionId) {
   const buf = terminalWriteBuffers.get(sessionId);
   if (!buf) return;
@@ -182,7 +239,7 @@ function createTerminalEntry(session) {
     linkHandler: {
       activate: (_event, uri) => {
         if (uri.startsWith('file://') && typeof openFileInPanel === 'function') {
-          try { openFileInPanel(sessionId, decodeURIComponent(new URL(uri).pathname)); } catch {}
+          openTerminalFileUri(sessionId, uri);
         } else {
           window.api.openExternal(uri);
         }
@@ -195,11 +252,12 @@ function createTerminalEntry(session) {
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(new WebLinksAddon.WebLinksAddon((_event, url) => {
     if (url.startsWith('file://') && typeof openFileInPanel === 'function') {
-      try { openFileInPanel(sessionId, decodeURIComponent(new URL(url).pathname)); } catch {}
+      openTerminalFileUri(sessionId, url);
     } else {
       window.api.openExternal(url);
     }
   }));
+  registerLocalFileLinkProvider(terminal, sessionId);
   const searchAddon = new SearchAddon.SearchAddon();
   terminal.loadAddon(searchAddon);
   terminal.loadAddon(new UnicodeGraphemesAddon.UnicodeGraphemesAddon());
