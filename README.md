@@ -21,6 +21,10 @@ Switchboard is a desktop app that gives you a unified view of all your agent ses
 - **Activity Stats** — Heatmap and model token summaries across Claude and Codex local history
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
 
+Provider badges make Claude, Codex, and Pi Mono sessions distinguishable in the same project history.
+
+![Provider-aware session browser](build/screenshot-providers.png)
+
 ## Codex Support
 
 This fork can launch and index Codex sessions alongside Claude Code sessions.
@@ -52,6 +56,8 @@ Supported Codex launch options:
 Codex session history is read from the local Codex state database and rollout files, then shown in the same sidebar/history views as Claude sessions.
 
 Codex model token totals are also merged into the Stats view from the local Codex state database, so model cards include entries such as `Codex gpt-5.5` alongside Claude models.
+
+![Stats with Codex model usage](build/screenshot-stats.png)
 
 ## Pi Mono Support
 
@@ -94,6 +100,8 @@ Supported Pi launch options:
 - optional external Pi history indexing
 - pre-launch command
 
+![Pi Mono launch configuration](build/screenshot-pi-config.png)
+
 ### Configuring Pi Mono
 
 There are two supported auth/config paths:
@@ -107,6 +115,8 @@ Useful fields:
 - **Session Directory** should usually stay empty. Empty means Switchboard stores Pi sessions in its own data directory and indexes only those sessions.
 - **External Pi History** is a Global Settings toggle. Enable it only if you want to import sessions created outside Switchboard from `~/.pi/agent/sessions`.
 - **Pre-launch Command** is useful when `pi` needs a specific Node runtime, for example `mise exec node@22 --`.
+
+![Provider settings](build/screenshot-settings-providers.png)
 
 By default, Pi sessions launched from Switchboard are stored under Switchboard's own data directory and indexed from there:
 
