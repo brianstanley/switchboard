@@ -398,7 +398,7 @@ body { display: flex; flex-direction: column; }
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.06);
   overflow: hidden;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, opacity 0.15s, transform 0.15s;
 }
 
 .project-group:first-child {
@@ -407,6 +407,29 @@ body { display: flex; flex-direction: column; }
 
 .project-group:hover {
   border-color: rgba(255,255,255,0.10);
+}
+
+.project-group.project-draggable .project-header.drag-enabled {
+  cursor: grab;
+}
+
+.project-group.dragging {
+  opacity: 0.55;
+  transform: scale(0.995);
+}
+
+.project-group.dragging .project-header.drag-enabled {
+  cursor: grabbing;
+}
+
+.project-group.drag-over-before {
+  border-color: rgba(128,136,255,0.8);
+  box-shadow: 0 -2px 0 #8088ff;
+}
+
+.project-group.drag-over-after {
+  border-color: rgba(128,136,255,0.8);
+  box-shadow: 0 2px 0 #8088ff;
 }
 
 .project-header {
@@ -918,6 +941,7 @@ body { display: flex; flex-direction: column; }
 }
 
 .session-stop-btn,
+.session-skills-btn,
 .session-launch-config-btn,
 .session-fork-btn,
 .session-jsonl-btn,
@@ -937,6 +961,11 @@ body { display: flex; flex-direction: column; }
 
 .session-stop-btn {
   color: #9b4058;
+}
+
+.session-skills-btn {
+  color: #7a6ab0;
+  display: none;
 }
 
 .session-launch-config-btn {
@@ -959,6 +988,11 @@ body { display: flex; flex-direction: column; }
 .session-stop-btn:hover {
   color: #e05070;
   background: rgba(224,80,112,0.1);
+}
+
+.session-skills-btn:hover {
+  color: #b08cff;
+  background: rgba(176,140,255,0.1);
 }
 
 .session-launch-config-btn:hover {
@@ -1025,8 +1059,8 @@ body { display: flex; flex-direction: column; }
   display: flex;
 }
 
-.session-item.has-running-pty .session-launch-config-btn {
-  display: none;
+.session-item.has-skills .session-skills-btn {
+  display: flex;
 }
 
 .session-item.is-terminal .session-fork-btn {
@@ -2823,6 +2857,7 @@ body { display: flex; flex-direction: column; }
 .add-project-dialog .add-project-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
 }
@@ -3497,6 +3532,13 @@ body { display: flex; flex-direction: column; }
   color: rgba(224,80,112,0.5);
 }
 
+.launch-config-hint {
+  margin: -2px 24px 12px;
+  color: #8a8aa0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .new-session-actions {
   position: sticky;
   bottom: 0;
@@ -3530,6 +3572,24 @@ body { display: flex; flex-direction: column; }
   color: #8888a0;
 }
 
+.new-session-save-btn {
+  background: rgba(128,136,255,0.1);
+  border: 1px solid rgba(128,136,255,0.24);
+  color: #a0a6ff;
+  font-size: 13px;
+  padding: 8px 18px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+
+.new-session-save-btn:hover {
+  background: rgba(128,136,255,0.16);
+  border-color: rgba(128,136,255,0.38);
+}
+
 .new-session-start-btn {
   background: rgba(62,207,90,0.12);
   border: 1px solid rgba(62,207,90,0.3);
@@ -3546,6 +3606,119 @@ body { display: flex; flex-direction: column; }
 .new-session-start-btn:hover {
   background: rgba(62,207,90,0.2);
   border-color: rgba(62,207,90,0.5);
+}
+
+/* ========== SKILLS DIALOG ========== */
+.skills-dialog {
+  background: #1e1e2a;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  width: 560px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+  display: flex;
+  flex-direction: column;
+}
+
+.skills-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.skills-dialog-header h3 {
+  margin: 0;
+  color: #d0d0e8;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.skills-dialog-subtitle {
+  margin-top: 4px;
+  color: #7a7a90;
+  font-size: 11.5px;
+}
+
+.skills-dialog-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #7a7a90;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.skills-dialog-close:hover {
+  color: #d0d0e8;
+  background: rgba(255,255,255,0.06);
+}
+
+.skills-dialog-session {
+  padding: 10px 20px;
+  color: #9090a8;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skills-list {
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.skill-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 11px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.025);
+}
+
+.skill-list-item + .skill-list-item {
+  margin-top: 8px;
+}
+
+.skill-list-name {
+  color: #d0d0e8;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.skill-list-description {
+  color: #8a8aa0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  margin-top: 3px;
+}
+
+.skill-list-source {
+  color: #8088ff;
+  background: rgba(128,136,255,0.1);
+  border: 1px solid rgba(128,136,255,0.15);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.skills-empty {
+  color: #7a7a90;
+  font-size: 13px;
+  padding: 24px 16px;
+  text-align: center;
 }
 
 /* ========== NEW SESSION POPOVER ========== */

@@ -77,11 +77,33 @@ let cachedProjects = [];
 let cachedAllProjects = [];
 let activePtyIds = new Set();
 let sortedOrder = []; // [{ projectPath, itemIds: [itemId, ...] }, ...] — single source of truth for sidebar order
+let customProjectOrder = [];
+let projectOrderSaveTimer = null;
 let activeTab = 'sessions';
 let cachedPlans = [];
 let visibleSessionCount = 10;
 let sessionMaxAgeDays = 3;
 const pendingSessions = new Map(); // sessionId → { session, projectPath, folder }
+
+function sanitizeProjectOrder(order) {
+  if (!Array.isArray(order)) return [];
+  return [...new Set(order.filter(path => typeof path === 'string' && path.trim()))];
+}
+
+function scheduleProjectOrderSave(order = customProjectOrder) {
+  customProjectOrder = sanitizeProjectOrder(order);
+  if (projectOrderSaveTimer) clearTimeout(projectOrderSaveTimer);
+  projectOrderSaveTimer = setTimeout(async () => {
+    projectOrderSaveTimer = null;
+    try {
+      const global = (await window.api.getSetting('global')) || {};
+      global.projectOrder = customProjectOrder;
+      await window.api.setSetting('global', global);
+    } catch (err) {
+      console.warn('Failed to save project order:', err);
+    }
+  }, 150);
+}
 
 // Bridge functions for settings-panel.js
 window._setVisibleSessionCount = (v) => { visibleSessionCount = v; };
@@ -401,6 +423,8 @@ todayToggle.addEventListener('click', () => {
 
 // --- Re-sort button ---
 resortBtn.addEventListener('click', () => {
+  customProjectOrder = [];
+  scheduleProjectOrderSave([]);
   loadProjects({ resort: true });
 });
 
@@ -794,7 +818,7 @@ async function openSession(session, customOptions) {
   const entry = createTerminalEntry(session);
 
   // Open terminal in main process
-  const resumeOptions = customOptions || await resolveDefaultSessionOptions({ projectPath }, session.provider || 'claude');
+  const resumeOptions = customOptions || await resolveSessionLaunchOptions(session, session.provider || 'claude');
   if (!resumeOptions.provider) resumeOptions.provider = session.provider || 'claude';
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result.ok) {
@@ -806,6 +830,42 @@ async function openSession(session, customOptions) {
 
   showSession(sessionId);
   pollActiveSessions();
+}
+
+async function waitForSessionStopped(sessionId, timeoutMs = 4000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const ids = await window.api.getActiveSessions();
+    if (!ids.includes(sessionId)) return true;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+async function restartSessionWithOptions(session, options) {
+  const sessionId = session.sessionId;
+  if (!confirm('Restart this session with the saved launch config?')) return;
+
+  if (activePtyIds.has(sessionId)) {
+    const result = await window.api.stopSession(sessionId);
+    if (!result?.ok && result?.error !== 'not running') {
+      alert('Could not stop session: ' + (result?.error || 'unknown error'));
+      return;
+    }
+    const stopped = await waitForSessionStopped(sessionId);
+    if (!stopped) {
+      alert('Timed out waiting for the session to stop.');
+      return;
+    }
+  }
+
+  activePtyIds.delete(sessionId);
+  if (openSessions.has(sessionId)) {
+    destroySession(sessionId);
+  }
+  await pollActiveSessions();
+  refreshSidebar();
+  openSession(session, options);
 }
 
 // Handle window resize
@@ -1009,26 +1069,33 @@ setTimeout(() => {
 
 
 // --- Init: restore settings ---
-(async () => {
-  const global = await window.api.getSetting('global');
-  if (global) {
-    if (global.sidebarWidth) {
-      document.getElementById('sidebar').style.width = global.sidebarWidth + 'px';
+const initialSettingsReady = (async () => {
+  try {
+    const global = await window.api.getSetting('global');
+    if (global) {
+      if (global.sidebarWidth) {
+        document.getElementById('sidebar').style.width = global.sidebarWidth + 'px';
+      }
+      if (global.visibleSessionCount) {
+        visibleSessionCount = global.visibleSessionCount;
+      }
+      if (global.sessionMaxAgeDays) {
+        sessionMaxAgeDays = global.sessionMaxAgeDays;
+      }
+      if (Array.isArray(global.projectOrder)) {
+        customProjectOrder = sanitizeProjectOrder(global.projectOrder);
+      }
+      if (global.terminalTheme && TERMINAL_THEMES[global.terminalTheme]) {
+        currentThemeName = global.terminalTheme;
+        TERMINAL_THEME = getTerminalTheme();
+      }
     }
-    if (global.visibleSessionCount) {
-      visibleSessionCount = global.visibleSessionCount;
-    }
-    if (global.sessionMaxAgeDays) {
-      sessionMaxAgeDays = global.sessionMaxAgeDays;
-    }
-    if (global.terminalTheme && TERMINAL_THEMES[global.terminalTheme]) {
-      currentThemeName = global.terminalTheme;
-      TERMINAL_THEME = getTerminalTheme();
-    }
+  } catch (err) {
+    console.warn('Failed to restore global settings:', err);
   }
 })();
 
-loadProjects().then(() => {
+initialSettingsReady.then(() => loadProjects().then(() => {
   // Restore grid view preference before opening sessions so they enter grid mode
   if (localStorage.getItem('gridViewActive') === '1') {
     showGridView();
@@ -1038,7 +1105,7 @@ loadProjects().then(() => {
     const session = sessionMap.get(activeSessionId);
     if (session) openSession(session);
   }
-});
+}));
 
 // Live-reload sidebar when filesystem changes are detected
 let projectsChangedTimer = null;

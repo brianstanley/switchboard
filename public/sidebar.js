@@ -3,13 +3,18 @@
 // pendingSessions, sessionMap, lastActivityTime, sortedOrder, searchMatchIds,
 // searchMatchProjectPaths, showStarredOnly, showRunningOnly, showTodayOnly,
 // visibleSessionCount, sessionMaxAgeDays, attentionSessions, responseReadySessions,
-// sessionBusyState, cachedProjects, cachedAllProjects, gridCards, gridViewActive (app.js)
+// sessionBusyState, cachedProjects, cachedAllProjects, gridCards, gridViewActive,
+// customProjectOrder, scheduleProjectOrderSave (app.js)
 // Depends on: cleanDisplayName, formatDate, escapeHtml (utils.js), ICONS (icons.js),
 // showSession (terminal-manager.js), confirmAndStopSession, pollActiveSessions,
 // showNewSessionPopover, openSettingsViewer, showResumeSessionDialog,
-// showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js)
+// showSessionSkillsDialog, showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js)
 
 const deletingSessionIds = new Set();
+const sessionSkillsCache = new Map();
+const SKILL_CACHE_TTL_MS = 30000;
+let draggingProjectPath = null;
+let suppressProjectHeaderClick = false;
 
 function setSessionDeleting(item, sessionId, deleting) {
   if (!item) return;
@@ -30,6 +35,167 @@ function setSessionDeleting(item, sessionId, deleting) {
     item.removeAttribute('aria-busy');
     item.querySelector('.session-delete-loading')?.remove();
   }
+}
+
+function skillCacheKey(session) {
+  return `${session?.provider || 'claude'}:${session?.projectPath || ''}`;
+}
+
+async function getSkillsForSession(session, { force = false } = {}) {
+  if (!session || session.type === 'terminal' || !window.api?.getSessionSkills) return [];
+  const key = skillCacheKey(session);
+  const cached = sessionSkillsCache.get(key);
+  if (!force && cached && cached.expiresAt > Date.now()) {
+    return cached.promise;
+  }
+
+  const promise = window.api.getSessionSkills({
+    provider: session.provider || 'claude',
+    projectPath: session.projectPath || '',
+  }).then(result => result?.skills || []).catch(() => []);
+
+  sessionSkillsCache.set(key, {
+    promise,
+    expiresAt: Date.now() + SKILL_CACHE_TTL_MS,
+  });
+  return promise;
+}
+
+function applySkillsState(item, skills) {
+  const btn = item?.querySelector('.session-skills-btn');
+  if (!btn) return;
+  const count = skills?.length || 0;
+  item.classList.toggle('has-skills', count > 0);
+  btn.title = count === 1 ? 'View 1 available skill' : `View ${count} available skills`;
+  btn.setAttribute('aria-label', btn.title);
+  btn.dataset.skillCount = String(count);
+}
+
+function updateSessionSkillButtons() {
+  sidebarContent.querySelectorAll('.session-item').forEach(item => {
+    const session = sessionMap.get(item.dataset.sessionId);
+    if (!session || session.type === 'terminal') return;
+    getSkillsForSession(session).then(skills => {
+      const currentItem = sidebarContent.querySelector(`[data-session-id="${session.sessionId}"]`);
+      if (currentItem) applySkillsState(currentItem, skills);
+    });
+  });
+}
+
+function canDragProjectGroups() {
+  return activeTab === 'sessions'
+    && searchMatchIds === null
+    && !showStarredOnly
+    && !showRunningOnly
+    && !showTodayOnly;
+}
+
+function getTopLevelProjectGroups() {
+  return Array.from(sidebarContent.querySelectorAll(':scope > .project-group[data-project-path]'));
+}
+
+function getProjectGroupByPath(projectPath) {
+  return getTopLevelProjectGroups().find(group => group.dataset.projectPath === projectPath) || null;
+}
+
+function syncSortedOrderProjectOrder(projectOrder) {
+  const previous = new Map(sortedOrder.map(entry => [entry.projectPath, entry]));
+  const topLevel = new Set(projectOrder);
+  const reordered = projectOrder.map(projectPath => previous.get(projectPath) || { projectPath, itemIds: [] });
+  for (const entry of sortedOrder) {
+    if (!topLevel.has(entry.projectPath)) reordered.push(entry);
+  }
+  sortedOrder = reordered;
+}
+
+function persistProjectOrderFromDom() {
+  const projectOrder = getTopLevelProjectGroups()
+    .map(group => group.dataset.projectPath)
+    .filter(Boolean);
+  if (projectOrder.length === 0) return;
+  const hiddenOrder = customProjectOrder.filter(projectPath => !projectOrder.includes(projectPath));
+  customProjectOrder = [...projectOrder, ...hiddenOrder];
+  syncSortedOrderProjectOrder(projectOrder);
+  scheduleProjectOrderSave(customProjectOrder);
+}
+
+function clearProjectDragState() {
+  getTopLevelProjectGroups().forEach(group => {
+    group.classList.remove('dragging', 'drag-over-before', 'drag-over-after');
+  });
+}
+
+function suppressProjectClickOnce() {
+  suppressProjectHeaderClick = true;
+  setTimeout(() => { suppressProjectHeaderClick = false; }, 120);
+}
+
+function bindProjectDragEvents() {
+  const enabled = canDragProjectGroups();
+  getTopLevelProjectGroups().forEach(group => {
+    const header = group.querySelector(':scope > .project-header');
+    group.draggable = false;
+    group.classList.toggle('project-draggable', enabled);
+    if (header) {
+      header.draggable = enabled;
+      header.classList.toggle('drag-enabled', enabled);
+      header.ondragstart = null;
+      header.ondragend = null;
+    }
+
+    group.ondragover = null;
+    group.ondragleave = null;
+    group.ondrop = null;
+    if (!enabled || !header) return;
+
+    header.ondragstart = (e) => {
+      if (e.target.closest('button,input,textarea,select,a')) {
+        e.preventDefault();
+        return;
+      }
+      draggingProjectPath = group.dataset.projectPath;
+      group.classList.add('dragging');
+      suppressProjectClickOnce();
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', draggingProjectPath);
+      if (typeof e.dataTransfer.setDragImage === 'function') {
+        e.dataTransfer.setDragImage(group, 12, 12);
+      }
+    };
+
+    group.ondragover = (e) => {
+      if (!draggingProjectPath || draggingProjectPath === group.dataset.projectPath) return;
+      e.preventDefault();
+      const rect = group.getBoundingClientRect();
+      const insertBefore = e.clientY < rect.top + (rect.height / 2);
+      group.classList.toggle('drag-over-before', insertBefore);
+      group.classList.toggle('drag-over-after', !insertBefore);
+      e.dataTransfer.dropEffect = 'move';
+    };
+
+    group.ondragleave = () => {
+      group.classList.remove('drag-over-before', 'drag-over-after');
+    };
+
+    group.ondrop = (e) => {
+      if (!draggingProjectPath || draggingProjectPath === group.dataset.projectPath) return;
+      e.preventDefault();
+      const source = getProjectGroupByPath(draggingProjectPath);
+      if (!source || source === group) return;
+      const rect = group.getBoundingClientRect();
+      const insertBefore = e.clientY < rect.top + (rect.height / 2);
+      sidebarContent.insertBefore(source, insertBefore ? group : group.nextSibling);
+      persistProjectOrderFromDom();
+      clearProjectDragState();
+      suppressProjectClickOnce();
+    };
+
+    header.ondragend = () => {
+      draggingProjectPath = null;
+      clearProjectDragState();
+      suppressProjectClickOnce();
+    };
+  });
 }
 
 function slugId(slug) {
@@ -139,9 +305,12 @@ function buildSlugGroup(slug, sessions) {
 function renderProjects(projects, resort) {
   const newSidebar = document.createElement('div');
 
-  // Sort project groups using sortedOrder as source of truth
-  if (!resort && sortedOrder.length > 0) {
-    const orderIndex = new Map(sortedOrder.map((e, i) => [e.projectPath, i]));
+  // Sort project groups using the manual order first, then the in-memory render order.
+  const projectOrder = customProjectOrder.length > 0
+    ? customProjectOrder
+    : (resort ? [] : sortedOrder.map(entry => entry.projectPath));
+  if (projectOrder.length > 0) {
+    const orderIndex = new Map(projectOrder.map((projectPath, i) => [projectPath, i]));
     projects = [...projects].sort((a, b) => {
       const aPos = orderIndex.get(a.projectPath);
       const bPos = orderIndex.get(b.projectPath);
@@ -151,7 +320,7 @@ function renderProjects(projects, resort) {
       return 0;
     });
   }
-  // projects are now in the correct order (data order for resort, preserved order otherwise)
+  // projects are now in the correct order (data order for resort, preserved/manual order otherwise)
 
   // Detect worktree projects and group them under their parent
   const worktreePattern = /^(.+?)\/\.claude\/worktrees\/([^/]+)\/?$/;
@@ -303,9 +472,15 @@ function renderProjects(projects, resort) {
     const group = document.createElement('div');
     group.className = 'project-group';
     group.id = fId;
+    group.dataset.projectPath = project.projectPath;
+    if (canDragProjectGroups()) group.classList.add('project-draggable');
 
     const header = document.createElement('div');
     header.className = 'project-header';
+    if (canDragProjectGroups()) {
+      header.classList.add('drag-enabled');
+      header.draggable = true;
+    }
     header.id = 'ph-' + fId;
     const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
     header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
@@ -450,6 +625,7 @@ function renderProjects(projects, resort) {
   sortedOrder = newSortedOrder;
 
   rebindSidebarEvents(projects);
+  updateSessionSkillButtons();
 
   // Restore terminal focus after morphdom DOM updates, but not if the user is
   // interacting with an input/textarea (search box, rename input, dialogs, etc.)
@@ -497,10 +673,16 @@ function rebindSidebarEvents(projects) {
       };
     }
     header.onclick = (e) => {
+      if (suppressProjectHeaderClick) {
+        e.preventDefault();
+        return;
+      }
       if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn')) return;
       header.classList.toggle('collapsed');
     };
   }
+
+  bindProjectDragEvents();
 
   // Bind worktree header events
   sidebarContent.querySelectorAll('.worktree-header').forEach(wtHeader => {
@@ -606,6 +788,15 @@ function rebindSidebarEvents(projects) {
       stopBtn.onclick = (e) => {
         e.stopPropagation();
         confirmAndStopSession(session.sessionId);
+      };
+    }
+
+    const skillsBtn = item.querySelector('.session-skills-btn');
+    if (skillsBtn) {
+      skillsBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const skills = await getSkillsForSession(session);
+        showSessionSkillsDialog(session, skills);
       };
     }
 
@@ -779,6 +970,12 @@ function buildSessionItem(session) {
   stopBtn.title = 'Stop session';
   stopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
 
+  const skillsBtn = document.createElement('button');
+  skillsBtn.className = 'session-skills-btn';
+  skillsBtn.title = 'View available skills';
+  skillsBtn.setAttribute('aria-label', 'View available skills');
+  skillsBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5"/><path d="M12 12v9"/><path d="M12 12L4 7.5"/></svg>';
+
   const archiveBtn = document.createElement('button');
   archiveBtn.className = 'session-archive-btn';
   archiveBtn.title = session.archived ? 'Unarchive' : 'Archive';
@@ -801,16 +998,18 @@ function buildSessionItem(session) {
 
   const launchConfigBtn = document.createElement('button');
   launchConfigBtn.className = 'session-launch-config-btn';
-  launchConfigBtn.title = 'Resume with config';
+  launchConfigBtn.title = 'Edit launch config';
+  launchConfigBtn.setAttribute('aria-label', 'Edit launch config');
   launchConfigBtn.innerHTML = ICONS.launchConfig(14);
 
   actions.appendChild(stopBtn);
   if (session.type !== 'terminal') {
+    actions.appendChild(launchConfigBtn);
+    actions.appendChild(skillsBtn);
     actions.appendChild(forkBtn);
     actions.appendChild(jsonlBtn);
     actions.appendChild(archiveBtn);
     actions.appendChild(deleteBtn);
-    actions.appendChild(launchConfigBtn);
   }
 
   row.appendChild(pin);

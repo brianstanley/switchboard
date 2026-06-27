@@ -1,15 +1,82 @@
 // --- Dialogs & session launch helpers ---
 // Depends on globals: launchNewSession, cachedProjects, cachedAllProjects, sessionMap,
-// pendingSessions, openSessions, activePtyIds, refreshSidebar, pollActiveSessions (app.js)
+// pendingSessions, openSessions, activePtyIds, refreshSidebar, pollActiveSessions,
+// restartSessionWithOptions (app.js)
 // Depends on: ICONS (icons.js)
 
 const PASSWORD_EYE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.06 12.35a11 11 0 0 1 19.88 0 11 11 0 0 1-19.88 0Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
 const PASSWORD_EYE_OFF_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 18 18"></path><path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58"></path><path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a12.04 12.04 0 0 1-4.07 5.06"></path><path d="M6.61 6.61A12.1 12.1 0 0 0 1 12a11.4 11.4 0 0 0 11 8 11 11 0 0 0 4.2-.82"></path></svg>';
+const SESSION_LAUNCH_CONFIG_PREFIX = 'session-launch-config:';
+const SESSION_LAUNCH_CONFIG_KEYS = [
+  'provider',
+  'dangerouslySkipPermissions',
+  'permissionMode',
+  'chrome',
+  'preLaunchCmd',
+  'anthropicApiKey',
+  'addDirs',
+  'mcpEmulation',
+  'codexApprovalPolicy',
+  'codexSandbox',
+  'codexModel',
+  'codexProfile',
+  'codexWebSearch',
+  'codexNoAltScreen',
+];
 
-function passwordField(id, placeholder) {
+function sessionLaunchConfigKey(sessionId) {
+  return SESSION_LAUNCH_CONFIG_PREFIX + sessionId;
+}
+
+function normalizeSessionLaunchOptions(options = {}, providerId = options.provider || 'claude') {
+  const normalized = { provider: providerId };
+  for (const key of SESSION_LAUNCH_CONFIG_KEYS) {
+    if (key === 'provider') continue;
+    if (Object.prototype.hasOwnProperty.call(options, key)) {
+      normalized[key] = options[key];
+    }
+  }
+  normalized.dangerouslySkipPermissions = !!normalized.dangerouslySkipPermissions;
+  if (normalized.dangerouslySkipPermissions) {
+    normalized.permissionMode = null;
+    normalized.codexApprovalPolicy = '';
+    normalized.codexSandbox = '';
+  }
+  return normalized;
+}
+
+async function getSavedSessionLaunchConfig(session) {
+  if (!session?.sessionId) return null;
+  const saved = await window.api.getSetting(sessionLaunchConfigKey(session.sessionId));
+  if (!saved || typeof saved !== 'object') return null;
+  const provider = session.provider || saved.provider || 'claude';
+  if (saved.provider && saved.provider !== provider) return null;
+  return normalizeSessionLaunchOptions(saved, provider);
+}
+
+async function saveSessionLaunchConfig(session, options) {
+  if (!session?.sessionId) return;
+  const provider = session.provider || options.provider || 'claude';
+  const normalized = normalizeSessionLaunchOptions(options, provider);
+  await window.api.setSetting(sessionLaunchConfigKey(session.sessionId), normalized);
+}
+
+async function resolveSessionLaunchOptions(session, providerId = session?.provider || 'claude') {
+  const base = await resolveDefaultSessionOptions({ projectPath: session.projectPath }, providerId);
+  const saved = await getSavedSessionLaunchConfig(session);
+  const merged = normalizeSessionLaunchOptions({ ...base, ...(saved || {}), provider: providerId }, providerId);
+  return merged;
+}
+
+function launchConfigPrimaryLabel(session) {
+  if (!session) return 'Start';
+  return activePtyIds.has(session.sessionId) ? 'Restart with Config' : 'Resume';
+}
+
+function passwordField(id, placeholder, value = '') {
   return `
     <div class="password-field">
-      <input type="password" class="settings-input" id="${id}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" spellcheck="false">
+      <input type="password" class="settings-input" id="${id}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}" autocomplete="off" spellcheck="false">
       <button type="button" class="password-visibility-btn" data-password-target="${id}" title="Show key" aria-label="Show key">${PASSWORD_EYE_ICON}</button>
     </div>
   `;
@@ -28,6 +95,62 @@ function bindPasswordVisibility(dialog) {
       input.focus();
     });
   });
+}
+
+function showSessionSkillsDialog(session, skills = []) {
+  document.querySelectorAll('.skills-dialog-overlay').forEach(el => el.remove());
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay skills-dialog-overlay';
+
+  const dialog = document.createElement('div');
+  dialog.className = 'skills-dialog';
+
+  const provider = (session?.provider || 'claude') === 'codex' ? 'Codex' : 'Claude';
+  const sessionName = cleanDisplayName(session?.name || session?.aiTitle || session?.summary || session?.sessionId || 'Session');
+  const projectName = session?.projectPath
+    ? session.projectPath.split('/').filter(Boolean).slice(-2).join('/')
+    : '';
+
+  const skillItems = skills.length
+    ? skills.map(skill => `
+      <div class="skill-list-item">
+        <div class="skill-list-main">
+          <div class="skill-list-name">${escapeHtml(skill.name || 'Unnamed skill')}</div>
+          <div class="skill-list-description">${escapeHtml(skill.description || 'No description')}</div>
+        </div>
+        <div class="skill-list-source">${escapeHtml(skill.source || '')}</div>
+      </div>
+    `).join('')
+    : '<div class="skills-empty">No installed skills were found for this session.</div>';
+
+  dialog.innerHTML = `
+    <div class="skills-dialog-header">
+      <div>
+        <h3>Available Skills</h3>
+        <div class="skills-dialog-subtitle">${escapeHtml(provider)}${projectName ? ' · ' + escapeHtml(projectName) : ''} · ${skills.length} skill${skills.length === 1 ? '' : 's'}</div>
+      </div>
+      <button type="button" class="skills-dialog-close" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="skills-dialog-session">${escapeHtml(sessionName)}</div>
+    <div class="skills-list">${skillItems}</div>
+  `;
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  function close() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape') close();
+  }
+
+  dialog.querySelector('.skills-dialog-close').onclick = close;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', onKey);
 }
 
 // --- New session dialog ---
@@ -228,7 +351,9 @@ async function launchTerminalSession(project) {
 
 async function showCodexSessionDialog(project, session) {
   const projectPath = session?.projectPath || project.projectPath;
-  const effective = await window.api.getEffectiveSettings(projectPath);
+  const effective = session
+    ? await resolveSessionLaunchOptions(session, 'codex')
+    : await window.api.getEffectiveSettings(projectPath);
 
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
@@ -237,7 +362,7 @@ async function showCodexSessionDialog(project, session) {
   dialog.className = 'new-session-dialog';
 
   let selectedApproval = effective.codexApprovalPolicy || '';
-  let dangerousSkip = effective.dangerouslySkipPermissions || false;
+  let dangerousSkip = !!effective.dangerouslySkipPermissions;
 
   const approvalModes = [
     { value: '', label: 'Default', desc: 'Use Codex config' },
@@ -255,13 +380,18 @@ async function showCodexSessionDialog(project, session) {
   }
 
   const isResume = !!session;
+  const isRunning = isResume && activePtyIds.has(session.sessionId);
   const sessionName = session ? (session.name || session.aiTitle || session.summary || session.sessionId.slice(0, 8)) : '';
   const title = isResume
-    ? `Resume Codex Session - ${escapeHtml(sessionName)}`
+    ? `Edit Codex Config - ${escapeHtml(sessionName)}`
     : `New Codex Session - ${escapeHtml(projectPath.split('/').filter(Boolean).slice(-2).join('/'))}`;
+  const actionHint = isResume
+    ? `<div class="launch-config-hint">${isRunning ? 'Changes are saved for future launches. Restart stops the current process and starts it again with this config.' : 'Changes are saved for this session and used the next time it resumes.'}</div>`
+    : '';
 
   dialog.innerHTML = `
     <h3>${title}</h3>
+    ${actionHint}
     <div class="settings-field">
       <div class="settings-label">Approval Mode</div>
       <div class="permission-grid" id="csd-approval-grid">${renderApprovalGrid()}</div>
@@ -336,7 +466,8 @@ async function showCodexSessionDialog(project, session) {
     </div>
     <div class="new-session-actions">
       <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">${isResume ? 'Resume' : 'Start'}</button>
+      ${isResume ? '<button class="new-session-save-btn">Save for Next Launch</button>' : ''}
+      <button class="new-session-start-btn">${isResume ? launchConfigPrimaryLabel(session) : 'Start'}</button>
     </div>
   `;
 
@@ -364,37 +495,53 @@ async function showCodexSessionDialog(project, session) {
   }
 
   function collectOptions() {
-    const options = { provider: 'codex' };
+    const options = {
+      provider: 'codex',
+      dangerouslySkipPermissions: !!dangerousSkip,
+      codexApprovalPolicy: '',
+      codexSandbox: '',
+      codexModel: dialog.querySelector('#csd-model').value.trim(),
+      codexProfile: dialog.querySelector('#csd-profile').value.trim(),
+      codexWebSearch: dialog.querySelector('#csd-web-search').checked,
+      codexNoAltScreen: dialog.querySelector('#csd-no-alt').checked,
+      preLaunchCmd: dialog.querySelector('#csd-pre-launch').value.trim(),
+      addDirs: dialog.querySelector('#csd-add-dirs').value.trim(),
+    };
     if (dangerousSkip) {
-      options.dangerouslySkipPermissions = true;
+      return options;
     } else {
-      if (selectedApproval) options.codexApprovalPolicy = selectedApproval;
-      const sandbox = dialog.querySelector('#csd-sandbox').value;
-      if (sandbox) options.codexSandbox = sandbox;
+      options.codexApprovalPolicy = selectedApproval || '';
+      options.codexSandbox = dialog.querySelector('#csd-sandbox').value || '';
     }
-    const model = dialog.querySelector('#csd-model').value.trim();
-    if (model) options.codexModel = model;
-    const profile = dialog.querySelector('#csd-profile').value.trim();
-    if (profile) options.codexProfile = profile;
-    if (dialog.querySelector('#csd-web-search').checked) options.codexWebSearch = true;
-    options.codexNoAltScreen = dialog.querySelector('#csd-no-alt').checked;
-    const preLaunch = dialog.querySelector('#csd-pre-launch').value.trim();
-    if (preLaunch) options.preLaunchCmd = preLaunch;
-    options.addDirs = dialog.querySelector('#csd-add-dirs').value.trim();
     return options;
   }
 
-  function startOrResume() {
+  async function saveOnly() {
     const options = collectOptions();
+    await saveSessionLaunchConfig(session, options);
+    close();
+    refreshSidebar();
+  }
+
+  async function startOrResume() {
+    const options = collectOptions();
+    if (isResume) {
+      await saveSessionLaunchConfig(session, options);
+    }
     close();
     if (isResume) {
-      openSession(session, options);
+      if (activePtyIds.has(session.sessionId)) {
+        restartSessionWithOptions(session, options);
+      } else {
+        openSession(session, options);
+      }
     } else {
       launchNewSession(project, options);
     }
   }
 
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
+  dialog.querySelector('.new-session-save-btn')?.addEventListener('click', saveOnly);
   dialog.querySelector('.new-session-start-btn').onclick = startOrResume;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
@@ -558,7 +705,7 @@ async function showResumeSessionDialog(session) {
     return showCodexSessionDialog(null, session);
   }
 
-  const effective = await window.api.getEffectiveSettings(session.projectPath);
+  const effective = await resolveSessionLaunchOptions(session, 'claude');
 
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
@@ -567,7 +714,7 @@ async function showResumeSessionDialog(session) {
   dialog.className = 'new-session-dialog';
 
   let selectedMode = effective.permissionMode || null;
-  let dangerousSkip = effective.dangerouslySkipPermissions || false;
+  let dangerousSkip = !!effective.dangerouslySkipPermissions;
 
   const modes = [
     { value: null, label: 'Default', desc: 'Prompt for all actions' },
@@ -586,9 +733,12 @@ async function showResumeSessionDialog(session) {
   }
 
   const sessionName = session.name || session.aiTitle || session.summary || session.sessionId.slice(0, 8);
+  const isRunning = activePtyIds.has(session.sessionId);
+  const actionHint = `<div class="launch-config-hint">${isRunning ? 'Changes are saved for future launches. Restart stops the current process and starts it again with this config.' : 'Changes are saved for this session and used the next time it resumes.'}</div>`;
 
   dialog.innerHTML = `
-    <h3>Resume Session — ${escapeHtml(sessionName)}</h3>
+    <h3>Edit Session Config — ${escapeHtml(sessionName)}</h3>
+    ${actionHint}
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
       <div class="permission-grid" id="rsd-mode-grid">${renderModeGrid()}</div>
@@ -617,7 +767,7 @@ async function showResumeSessionDialog(session) {
         <div class="settings-description">Overrides <code>ANTHROPIC_API_KEY</code> for this session only</div>
       </div>
       <div class="settings-field-control">
-        ${passwordField('rsd-anthropic-api-key', 'Use default environment key')}
+        ${passwordField('rsd-anthropic-api-key', 'Use default environment key', effective.anthropicApiKey || '')}
       </div>
     </div>
     <div class="settings-field settings-field-wide">
@@ -631,7 +781,8 @@ async function showResumeSessionDialog(session) {
     </div>
     <div class="new-session-actions">
       <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">Resume</button>
+      <button class="new-session-save-btn">Save for Next Launch</button>
+      <button class="new-session-start-btn">${launchConfigPrimaryLabel(session)}</button>
     </div>
   `;
 
@@ -659,27 +810,45 @@ async function showResumeSessionDialog(session) {
     overlay.remove();
   }
 
-  function resume() {
-    const options = { provider: 'claude' };
+  function collectOptions() {
+    const options = {
+      provider: 'claude',
+      dangerouslySkipPermissions: !!dangerousSkip,
+      permissionMode: null,
+      chrome: dialog.querySelector('#rsd-chrome').checked,
+      preLaunchCmd: dialog.querySelector('#rsd-pre-launch').value.trim(),
+      anthropicApiKey: dialog.querySelector('#rsd-anthropic-api-key').value.trim(),
+      addDirs: dialog.querySelector('#rsd-add-dirs').value.trim(),
+    };
     if (dangerousSkip) {
-      options.dangerouslySkipPermissions = true;
+      return options;
     } else if (selectedMode) {
       options.permissionMode = selectedMode;
     }
-    if (dialog.querySelector('#rsd-chrome').checked) {
-      options.chrome = true;
-    }
-    const preLaunch = dialog.querySelector('#rsd-pre-launch').value.trim();
-    if (preLaunch) options.preLaunchCmd = preLaunch;
-    const anthropicApiKey = dialog.querySelector('#rsd-anthropic-api-key').value.trim();
-    if (anthropicApiKey) options.anthropicApiKey = anthropicApiKey;
-    options.addDirs = dialog.querySelector('#rsd-add-dirs').value.trim();
     if (effective.mcpEmulation === false) options.mcpEmulation = false;
+    return options;
+  }
+
+  async function saveOnly() {
+    const options = collectOptions();
+    await saveSessionLaunchConfig(session, options);
     close();
-    openSession(session, options);
+    refreshSidebar();
+  }
+
+  async function resume() {
+    const options = collectOptions();
+    await saveSessionLaunchConfig(session, options);
+    close();
+    if (activePtyIds.has(session.sessionId)) {
+      restartSessionWithOptions(session, options);
+    } else {
+      openSession(session, options);
+    }
   }
 
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
+  dialog.querySelector('.new-session-save-btn').onclick = saveOnly;
   dialog.querySelector('.new-session-start-btn').onclick = resume;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 

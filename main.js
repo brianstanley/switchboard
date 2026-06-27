@@ -42,6 +42,7 @@ const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { getProvider, getProviderMeta } = require('./providers');
 const { adaptCodexRollout } = require('./codex-log-adapter');
+const { listSessionSkills } = require('./skill-scanner');
 
 
 
@@ -868,6 +869,7 @@ ipcMain.handle('get-effective-settings', (_event, projectPath) => {
 });
 
 ipcMain.handle('get-provider-meta', () => getProviderMeta());
+ipcMain.handle('get-session-skills', (_event, session) => listSessionSkills(session || {}));
 
 // --- IPC: get-active-sessions ---
 ipcMain.handle('get-active-sessions', () => {
