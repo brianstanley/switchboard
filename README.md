@@ -160,6 +160,8 @@ Open a running or resumed session, then click the key icon in the terminal heade
 - mark a variable as **Secret**
 - tag, search, edit, copy, delete, insert, or send variables
 
+The same key icon is available inside Claude and Pi Mono **Configure...** dialogs next to API key fields, so saved variables can fill `ANTHROPIC_API_KEY` or Pi `--api-key` overrides without leaving the dialog.
+
 Actions:
 
 - **Copy** copies the selected variables to the clipboard.

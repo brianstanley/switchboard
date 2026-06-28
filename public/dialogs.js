@@ -6,6 +6,7 @@
 
 const PASSWORD_EYE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.06 12.35a11 11 0 0 1 19.88 0 11 11 0 0 1-19.88 0Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
 const PASSWORD_EYE_OFF_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 18 18"></path><path d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58"></path><path d="M9.88 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a12.04 12.04 0 0 1-4.07 5.06"></path><path d="M6.61 6.61A12.1 12.1 0 0 0 1 12a11.4 11.4 0 0 0 11 8 11 11 0 0 0 4.2-.82"></path></svg>';
+const PASSWORD_KEY_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="M12 12l8.5-8.5"></path><path d="M16 8l2 2"></path><path d="M18.5 5.5l2 2"></path></svg>';
 const PI_ICON = '<svg class="popover-option-icon pi-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5h10"/><path d="M9 5v14"/><path d="M15 5v14"/><path d="M5 12h14"/></svg>';
 const SESSION_LAUNCH_CONFIG_PREFIX = 'session-launch-config:';
 const SESSION_LAUNCH_CONFIG_KEYS = [
@@ -87,11 +88,15 @@ function launchConfigPrimaryLabel(session) {
   return activePtyIds.has(session.sessionId) ? 'Restart with Config' : 'Resume';
 }
 
-function passwordField(id, placeholder, value = '') {
+function passwordField(id, placeholder, value = '', options = {}) {
+  const savedVariableButton = options.savedVariables
+    ? `<button type="button" class="password-variable-btn" data-variable-target="${id}" title="Use saved variable" aria-label="Use saved variable">${PASSWORD_KEY_ICON}</button>`
+    : '';
   return `
-    <div class="password-field">
+    <div class="password-field${options.savedVariables ? ' has-variable-picker' : ''}">
       <input type="password" class="settings-input" id="${id}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}" autocomplete="off" spellcheck="false">
       <button type="button" class="password-visibility-btn" data-password-target="${id}" title="Show key" aria-label="Show key">${PASSWORD_EYE_ICON}</button>
+      ${savedVariableButton}
     </div>
   `;
 }
@@ -107,6 +112,112 @@ function bindPasswordVisibility(dialog) {
       btn.setAttribute('aria-label', visible ? 'Show key' : 'Hide key');
       btn.innerHTML = visible ? PASSWORD_EYE_ICON : PASSWORD_EYE_OFF_ICON;
       input.focus();
+    });
+  });
+}
+
+function savedVariableScopeLabel(variable, projectPath) {
+  if (variable.scope !== 'project') return 'Global';
+  const scopedPath = variable.projectPath || projectPath || '';
+  const parts = scopedPath.split(/[\\/]/).filter(Boolean);
+  return parts.slice(-2).join('/') || 'Project';
+}
+
+function positionSavedVariableMenu(menu, button) {
+  const rect = button.getBoundingClientRect();
+  const width = 280;
+  menu.style.width = width + 'px';
+  menu.style.left = Math.min(window.innerWidth - width - 12, Math.max(12, rect.right - width)) + 'px';
+  menu.style.top = Math.min(window.innerHeight - 260, rect.bottom + 6) + 'px';
+}
+
+function bindSavedVariablePickers(dialog, projectPath) {
+  let activeMenu = null;
+
+  function closeMenu() {
+    if (!activeMenu) return;
+    activeMenu.remove();
+    activeMenu = null;
+    document.removeEventListener('mousedown', onDocumentMouseDown, true);
+    document.removeEventListener('keydown', onDocumentKeyDown, true);
+  }
+
+  function onDocumentMouseDown(event) {
+    if (activeMenu?.contains(event.target) || event.target.closest('.password-variable-btn')) return;
+    closeMenu();
+  }
+
+  function onDocumentKeyDown(event) {
+    if (event.key === 'Escape') closeMenu();
+  }
+
+  async function applyVariable(input, variableId) {
+    const result = await window.api.getSavedVariable(variableId);
+    if (!result?.ok) {
+      if (activeMenu) activeMenu.innerHTML = `<div class="saved-variable-picker-empty">${escapeHtml(result?.error || 'Could not load variable')}</div>`;
+      return;
+    }
+    input.value = result.variable.value || '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    closeMenu();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
+  function renderMenu(menu, variables, input) {
+    if (!Array.isArray(variables)) {
+      menu.innerHTML = '<div class="saved-variable-picker-empty">Could not load variables</div>';
+      return;
+    }
+    if (!variables.length) {
+      menu.innerHTML = '<div class="saved-variable-picker-empty">No saved variables</div>';
+      return;
+    }
+
+    menu.innerHTML = `
+      <div class="saved-variable-picker-title">Saved Variables</div>
+      <div class="saved-variable-picker-list">
+        ${variables.map(variable => `
+          <button type="button" class="saved-variable-picker-item" data-variable-id="${escapeHtml(variable.id)}">
+            <span class="saved-variable-picker-name">
+              ${escapeHtml(variable.name)}
+              ${variable.secret ? '<span class="saved-variable-picker-secret">Secret</span>' : ''}
+            </span>
+            <span class="saved-variable-picker-meta">
+              ${escapeHtml(savedVariableScopeLabel(variable, projectPath))}
+              ${(variable.tags || []).slice(0, 2).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}
+            </span>
+          </button>
+        `).join('')}
+      </div>
+    `;
+
+    menu.querySelectorAll('[data-variable-id]').forEach(item => {
+      item.addEventListener('click', () => applyVariable(input, item.dataset.variableId));
+    });
+  }
+
+  dialog.querySelectorAll('.password-variable-btn').forEach(button => {
+    button.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const input = dialog.querySelector(`#${button.dataset.variableTarget}`);
+      if (!input) return;
+
+      if (activeMenu) closeMenu();
+      activeMenu = document.createElement('div');
+      activeMenu.className = 'saved-variable-picker-menu';
+      activeMenu.innerHTML = '<div class="saved-variable-picker-empty">Loading...</div>';
+      document.body.appendChild(activeMenu);
+      positionSavedVariableMenu(activeMenu, button);
+
+      document.addEventListener('mousedown', onDocumentMouseDown, true);
+      document.addEventListener('keydown', onDocumentKeyDown, true);
+
+      const variables = await window.api.listSavedVariables(projectPath || null);
+      renderMenu(activeMenu, variables, input);
+      positionSavedVariableMenu(activeMenu, button);
     });
   });
 }
@@ -670,7 +781,7 @@ async function showPiSessionDialog(project, session) {
         <div class="settings-description">Passed to Pi as <code>--api-key</code> for this launch</div>
       </div>
       <div class="settings-field-control">
-        ${passwordField('psd-api-key', 'Use Pi default auth', effective.piApiKey || '')}
+        ${passwordField('psd-api-key', 'Use Pi default auth', effective.piApiKey || '', { savedVariables: true })}
       </div>
     </div>
     <div class="settings-field">
@@ -781,6 +892,7 @@ async function showPiSessionDialog(project, session) {
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
   bindPasswordVisibility(dialog);
+  bindSavedVariablePickers(dialog, projectPath);
 
   const trustGrid = dialog.querySelector('#psd-trust-grid');
   trustGrid.addEventListener('click', (e) => {
@@ -932,7 +1044,7 @@ async function showNewSessionDialog(project, providerId = 'claude') {
         <div class="settings-description">Overrides <code>ANTHROPIC_API_KEY</code> for this session only</div>
       </div>
       <div class="settings-field-control">
-        ${passwordField('nsd-anthropic-api-key', 'Use default environment key')}
+        ${passwordField('nsd-anthropic-api-key', 'Use default environment key', '', { savedVariables: true })}
       </div>
     </div>
     <div class="settings-field settings-field-wide">
@@ -953,6 +1065,7 @@ async function showNewSessionDialog(project, providerId = 'claude') {
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
   bindPasswordVisibility(dialog);
+  bindSavedVariablePickers(dialog, project.projectPath);
 
   // Bind mode grid clicks
   const modeGrid = dialog.querySelector('#nsd-mode-grid');
@@ -1080,7 +1193,7 @@ async function showResumeSessionDialog(session) {
         <div class="settings-description">Overrides <code>ANTHROPIC_API_KEY</code> for this session only</div>
       </div>
       <div class="settings-field-control">
-        ${passwordField('rsd-anthropic-api-key', 'Use default environment key', effective.anthropicApiKey || '')}
+        ${passwordField('rsd-anthropic-api-key', 'Use default environment key', effective.anthropicApiKey || '', { savedVariables: true })}
       </div>
     </div>
     <div class="settings-field settings-field-wide">
@@ -1102,6 +1215,7 @@ async function showResumeSessionDialog(session) {
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
   bindPasswordVisibility(dialog);
+  bindSavedVariablePickers(dialog, session.projectPath);
 
   // Bind mode grid clicks
   const modeGrid = dialog.querySelector('#rsd-mode-grid');
