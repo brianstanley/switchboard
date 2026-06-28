@@ -18,6 +18,7 @@ Switchboard is a desktop app that gives you a unified view of all your agent ses
 - **Full-Text Search** — Find any session by what was discussed, not just when it happened
 - **IDE Emulation** — Switchboard acts as an IDE for Claude CLI, showing file diffs and opens in a side panel where you can accept, reject, or edit changes before they're applied. Supports both inline and side-by-side diff views. Disable this in Global Settings if you prefer Claude to use your own editor (VS Code, Cursor, etc.)
 - **Plans & Memory** — Browse and edit your plan files and CLAUDE.md memory in one place
+- **Saved Variables** — Store frequently used strings or credentials and insert them into the active agent prompt with a couple of clicks
 - **Activity Stats** — Heatmap and model token summaries across Claude and Codex local history
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
 
@@ -145,6 +146,33 @@ pi --no-session --no-skills --no-context-files --offline
 When launching Claude through **Claude (Configure...)**, you can optionally set an `ANTHROPIC_API_KEY` override for that session. Leaving the field empty keeps using the default environment/auth configuration.
 
 See [docs/multi-provider-codex-plan.md](docs/multi-provider-codex-plan.md) for implementation notes.
+
+## Saved Variables
+
+Switchboard can store frequently reused variables, credentials, IDs, or prompt snippets so you do not need to keep copying them from a separate notes app.
+
+Open a running or resumed session, then click the key icon in the terminal header next to the running/stopped status. The **Saved Variables** dialog lets you:
+
+- create global variables available from any project
+- create project-scoped variables that only appear for the current project
+- mark a variable as **Secret**
+- tag, search, edit, copy, delete, insert, or send variables
+
+Actions:
+
+- **Copy** copies the selected variables to the clipboard.
+- **Insert** writes the selected variables into the active terminal prompt without pressing Enter.
+- **Send** writes the selected variables into the active terminal prompt and submits them.
+
+When multiple variables are selected, Switchboard formats them as one prompt-safe line:
+
+```text
+Saved variables: API_TOKEN=...; CUSTOMER_ID=...
+```
+
+Secret variables are encrypted with Electron's `safeStorage` before being written to Switchboard's SQLite database. Non-secret variables are stored as plain text.
+
+Important: once a variable is inserted or sent to an agent, it becomes part of that session's prompt/history just like any text you type manually.
 
 ## Session Grid Overview
 
