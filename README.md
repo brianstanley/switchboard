@@ -151,6 +151,8 @@ See [docs/multi-provider-codex-plan.md](docs/multi-provider-codex-plan.md) for i
 
 Switchboard can store frequently reused variables, credentials, IDs, or prompt snippets so you do not need to keep copying them from a separate notes app.
 
+![Saved Variables](build/screenshot-saved-variables.png)
+
 Open a running or resumed session, then click the key icon in the terminal header next to the running/stopped status. The **Saved Variables** dialog lets you:
 
 - create global variables available from any project
