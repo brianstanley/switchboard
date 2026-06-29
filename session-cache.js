@@ -5,8 +5,8 @@ const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
 const { readSessionFile } = require('./read-session-file');
 const { encodeProjectPath } = require('./encode-project-path');
-const { scanCodexSessions } = require('./codex-session-scanner');
-const { scanPiSessions, piSessionsDir, expandHome } = require('./pi-session-scanner');
+const { scanCodexSessions, stateDbPath } = require('./codex-session-scanner');
+const { parsePiSessionFile, piSessionsDir, expandHome } = require('./pi-session-scanner');
 
 /**
  * Session cache module.
@@ -19,6 +19,9 @@ let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
 let lastCodexScanAt = 0;
 let lastPiScanAt = 0;
+let lastCodexStateFingerprint = null;
+
+const PI_SCAN_MAX_DEPTH = 5;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -178,6 +181,122 @@ function populateCacheFromFilesystem() {
   }
 }
 
+function comparable(value) {
+  return value == null ? '' : String(value);
+}
+
+function providerSessionMatchesCached(row, session) {
+  return comparable(row.folder) === comparable(session.folder)
+    && comparable(row.provider || 'claude') === comparable(session.provider || 'claude')
+    && comparable(row.projectPath) === comparable(session.projectPath)
+    && comparable(row.summary) === comparable(session.summary)
+    && comparable(row.firstPrompt) === comparable(session.firstPrompt)
+    && comparable(row.created) === comparable(session.created)
+    && comparable(row.modified) === comparable(session.modified)
+    && Number(row.messageCount || 0) === Number(session.messageCount || 0)
+    && comparable(row.slug) === comparable(session.slug)
+    && comparable(row.aiTitle) === comparable(session.aiTitle)
+    && comparable(row.filePath) === comparable(session.filePath);
+}
+
+function latestProviderSessions(sessions) {
+  const byId = new Map();
+  for (const session of sessions || []) {
+    if (!session || !session.sessionId) continue;
+    const existing = byId.get(session.sessionId);
+    if (!existing || new Date(session.modified || 0) >= new Date(existing.modified || 0)) {
+      byId.set(session.sessionId, session);
+    }
+  }
+  return Array.from(byId.values());
+}
+
+function providerSearchEntry(session) {
+  const name = getMeta(session.sessionId)?.name || session.customTitle || session.aiTitle || '';
+  return {
+    id: session.sessionId,
+    type: 'session',
+    folder: session.folder,
+    title: (name ? name + ' ' : '') + session.summary,
+    body: session.textContent || session.firstPrompt || '',
+  };
+}
+
+function cachedProviderRowAsSession(row) {
+  return {
+    sessionId: row.sessionId,
+    provider: row.provider || 'claude',
+    folder: row.folder,
+    projectPath: row.projectPath,
+    summary: row.summary,
+    firstPrompt: row.firstPrompt,
+    created: row.created,
+    modified: row.modified,
+    messageCount: row.messageCount || 0,
+    slug: row.slug || null,
+    aiTitle: row.aiTitle || null,
+    filePath: row.filePath || null,
+  };
+}
+
+function collectJsonlFiles(rootDir, maxDepth = PI_SCAN_MAX_DEPTH) {
+  const files = [];
+  const visited = new Set();
+
+  function walk(dir, depth) {
+    if (depth > maxDepth) return;
+    let realPath;
+    try { realPath = fs.realpathSync(dir); } catch { return; }
+    if (visited.has(realPath)) return;
+    visited.add(realPath);
+
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        walk(fullPath, depth + 1);
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        files.push(fullPath);
+      }
+    }
+  }
+
+  if (rootDir && fs.existsSync(rootDir)) walk(rootDir, 0);
+  return files;
+}
+
+function scanPiSessionsIncremental() {
+  const cachedByFilePath = new Map();
+  for (const row of getCachedByProvider ? getCachedByProvider('pi') : []) {
+    if (row.filePath) cachedByFilePath.set(row.filePath, row);
+  }
+
+  const byPath = new Map();
+  for (const candidate of getPiSessionRoots()) {
+    const scanRoot = expandHome(candidate);
+    if (!scanRoot) continue;
+    for (const filePath of collectJsonlFiles(scanRoot)) {
+      if (byPath.has(filePath)) continue;
+      let fileMtime = null;
+      try { fileMtime = fs.statSync(filePath).mtime.toISOString(); } catch { continue; }
+
+      const cached = cachedByFilePath.get(filePath);
+      if (cached && cached.modified === fileMtime) {
+        byPath.set(filePath, cachedProviderRowAsSession(cached));
+        continue;
+      }
+
+      byPath.set(filePath, parsePiSessionFile(filePath));
+    }
+  }
+
+  return Array.from(byPath.values())
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.modified) - new Date(a.modified));
+}
+
 function refreshProviderSessions(provider, scanFn, scanState, label) {
   const now = Date.now();
   if (!scanState.force && now - scanState.lastScanAt < 5000) return false;
@@ -191,41 +310,74 @@ function refreshProviderSessions(provider, scanFn, scanState, label) {
     return false;
   }
 
-  const previous = getCachedByProvider ? getCachedByProvider(provider).map(row => row.sessionId) : [];
-  const currentIds = new Set(sessions.map(s => s.sessionId));
-  const changed = sessions.length > 0 || previous.length > 0;
+  sessions = latestProviderSessions(sessions);
+  const previous = getCachedByProvider ? getCachedByProvider(provider) : [];
+  const previousById = new Map(previous.map(row => [row.sessionId, row]));
+  const currentIds = new Set();
+  const sessionsToUpsert = [];
+  const searchEntriesToUpsert = [];
+  const sessionsToDelete = [];
 
-  if (deleteCachedProvider) deleteCachedProvider(provider);
-  for (const sessionId of previous) {
+  for (const session of sessions) {
+    currentIds.add(session.sessionId);
+    const cached = previousById.get(session.sessionId);
+    if (cached && providerSessionMatchesCached(cached, session)) continue;
+    sessionsToUpsert.push(session);
+    searchEntriesToUpsert.push(providerSearchEntry(session));
+  }
+
+  for (const row of previous) {
+    if (!currentIds.has(row.sessionId)) sessionsToDelete.push(row.sessionId);
+  }
+
+  for (const sessionId of sessionsToDelete) {
+    deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
   }
 
-  if (sessions.length > 0) {
-    upsertCachedSessions(sessions);
-    for (const s of sessions) {
-      if (s.customTitle) setName(s.sessionId, s.customTitle);
+  if (sessionsToUpsert.length > 0) {
+    upsertCachedSessions(sessionsToUpsert);
+    for (const session of sessionsToUpsert) {
+      if (session.customTitle) setName(session.sessionId, session.customTitle);
     }
-    upsertSearchEntries(sessions.map(s => {
-      const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
-      return {
-        id: s.sessionId,
-        type: 'session',
-        folder: s.folder,
-        title: (name ? name + ' ' : '') + s.summary,
-        body: s.textContent || s.firstPrompt || '',
-      };
-    }));
+    upsertSearchEntries(searchEntriesToUpsert);
   }
 
-  return changed || currentIds.size > 0;
+  return sessionsToUpsert.length > 0 || sessionsToDelete.length > 0;
+}
+
+function fileMtimeMs(filePath) {
+  try { return fs.statSync(filePath).mtimeMs; } catch { return 0; }
+}
+
+function codexStateFingerprint() {
+  const dbPath = stateDbPath();
+  const dbMtime = fileMtimeMs(dbPath);
+  if (!dbMtime) return null;
+  return [
+    dbMtime,
+    fileMtimeMs(dbPath + '-wal'),
+    fileMtimeMs(dbPath + '-shm'),
+  ].join(':');
 }
 
 function refreshCodexSessions({ force = false } = {}) {
-  return refreshProviderSessions('codex', scanCodexSessions, {
+  const now = Date.now();
+  if (!force && now - lastCodexScanAt < 5000) return false;
+
+  const fingerprint = codexStateFingerprint();
+  if (!force && fingerprint && fingerprint === lastCodexStateFingerprint) {
+    lastCodexScanAt = now;
+    return false;
+  }
+
+  const changed = refreshProviderSessions('codex', scanCodexSessions, {
     force,
     lastScanAt: lastCodexScanAt,
     setLastScanAt: (value) => { lastCodexScanAt = value; },
   }, 'codex');
+  lastCodexStateFingerprint = fingerprint;
+  return changed;
 }
 
 function getPiSessionRoots() {
@@ -255,7 +407,7 @@ function getPiSessionRoots() {
 }
 
 function refreshPiSessions({ force = false } = {}) {
-  return refreshProviderSessions('pi', () => scanPiSessions({ roots: getPiSessionRoots() }), {
+  return refreshProviderSessions('pi', scanPiSessionsIncremental, {
     force,
     lastScanAt: lastPiScanAt,
     setLastScanAt: (value) => { lastPiScanAt = value; },
