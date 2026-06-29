@@ -80,12 +80,20 @@ pi
 
 Inside Pi, run `/login` and configure a provider/model. If Pi prints `No models available`, Switchboard can launch it, but Pi still needs auth/model configuration.
 
+If `pi` already works from a normal terminal, no Switchboard-specific Pi setup is required. The default **Pi Mono** launch uses your existing Pi auth and model configuration, then adds only a Switchboard-managed session directory so the session can be indexed in the sidebar.
+
 ### Launching Pi Mono
 
 Use the `+` button on a project and choose:
 
 - **Pi Mono** — launch with the saved/default Pi settings.
 - **Pi Mono (Configure...)** — override launch settings for this session only.
+
+With no Pi settings saved, a new session is launched with the Pi CLI defaults plus a Switchboard session directory:
+
+```bash
+pi --session-dir <switchboard-data-dir>/pi-sessions --session-id <session-id>
+```
 
 Supported Pi launch options:
 
