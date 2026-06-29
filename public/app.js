@@ -85,6 +85,7 @@ let cachedPlans = [];
 let visibleSessionCount = 10;
 let sessionMaxAgeDays = 3;
 const pendingSessions = new Map(); // sessionId → { session, projectPath, folder }
+const openingSessionKeys = new Set();
 
 function sanitizeProjectOrder(order) {
   if (!Array.isArray(order)) return [];
@@ -728,54 +729,62 @@ async function loadProjects({ resort = false } = {}) {
 
 
 async function launchNewSession(project, sessionOptions) {
-  const sessionId = crypto.randomUUID();
   const projectPath = project.projectPath;
   const provider = sessionOptions?.provider || 'claude';
-  const session = {
-    sessionId,
-    summary: provider === 'codex'
-      ? 'New Codex session'
-      : (provider === 'pi' ? 'New Pi session' : 'New session'),
-    firstPrompt: '',
-    projectPath,
-    provider,
-    name: null,
-    starred: 0,
-    archived: 0,
-    messageCount: 0,
-    modified: new Date().toISOString(),
-    created: new Date().toISOString(),
-  };
+  const openingKey = `new:${provider}:${projectPath}`;
+  if (openingSessionKeys.has(openingKey)) return;
+  openingSessionKeys.add(openingKey);
 
-  // Track as pending (no .jsonl yet)
-  const folder = encodeProjectPath(projectPath);
-  pendingSessions.set(sessionId, { session, projectPath, folder });
+  try {
+    const sessionId = crypto.randomUUID();
+    const session = {
+      sessionId,
+      summary: provider === 'codex'
+        ? 'New Codex session'
+        : (provider === 'pi' ? 'New Pi session' : 'New session'),
+      firstPrompt: '',
+      projectPath,
+      provider,
+      name: null,
+      starred: 0,
+      archived: 0,
+      messageCount: 0,
+      modified: new Date().toISOString(),
+      created: new Date().toISOString(),
+    };
 
-  // Inject into cached project data so it appears in sidebar immediately
-  sessionMap.set(sessionId, session);
-  for (const projList of [cachedProjects, cachedAllProjects]) {
-    let proj = projList.find(p => p.projectPath === projectPath);
-    if (!proj) {
-      proj = { folder, projectPath, sessions: [] };
-      projList.unshift(proj);
+    // Track as pending (no .jsonl yet)
+    const folder = encodeProjectPath(projectPath);
+    pendingSessions.set(sessionId, { session, projectPath, folder });
+
+    // Inject into cached project data so it appears in sidebar immediately
+    sessionMap.set(sessionId, session);
+    for (const projList of [cachedProjects, cachedAllProjects]) {
+      let proj = projList.find(p => p.projectPath === projectPath);
+      if (!proj) {
+        proj = { folder, projectPath, sessions: [] };
+        projList.unshift(proj);
+      }
+      proj.sessions.unshift(session);
     }
-    proj.sessions.unshift(session);
+    refreshSidebar();
+
+    const entry = createTerminalEntry(session);
+
+    // Open terminal in main process with session options
+    const result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null);
+    if (!result.ok) {
+      entry.terminal.write(`\r\nError: ${result.error}\r\n`);
+      entry.closed = true;
+      return;
+    }
+    if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
+
+    showSession(sessionId);
+    pollActiveSessions();
+  } finally {
+    openingSessionKeys.delete(openingKey);
   }
-  refreshSidebar();
-
-  const entry = createTerminalEntry(session);
-
-  // Open terminal in main process with session options
-  const result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null);
-  if (!result.ok) {
-    entry.terminal.write(`\r\nError: ${result.error}\r\n`);
-    entry.closed = true;
-    return;
-  }
-  if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
-
-  showSession(sessionId);
-  pollActiveSessions();
 }
 
 // Legacy alias
@@ -811,41 +820,48 @@ async function showTerminalHeader(session) {
 
 async function openSession(session, customOptions) {
   const { sessionId, projectPath } = session;
+  const openingKey = `open:${sessionId}`;
+  if (openingSessionKeys.has(openingKey)) return;
+  openingSessionKeys.add(openingKey);
 
-  // If already open, handle closed-session cleanup or just show it
-  if (openSessions.has(sessionId)) {
-    const entry = openSessions.get(sessionId);
-    if (entry.closed) {
-      destroySession(sessionId);
-      if (session.type === 'terminal') {
-        launchTerminalSession({ projectPath: session.projectPath });
+  try {
+    // If already open, handle closed-session cleanup or just show it
+    if (openSessions.has(sessionId)) {
+      const entry = openSessions.get(sessionId);
+      if (entry.closed) {
+        destroySession(sessionId);
+        if (session.type === 'terminal') {
+          launchTerminalSession({ projectPath: session.projectPath });
+          return;
+        }
+      } else {
+        showSession(sessionId);
         return;
       }
-    } else {
-      showSession(sessionId);
+    }
+
+    // Create new terminal entry (hidden until showSession)
+    const entry = createTerminalEntry(session);
+
+    // Open terminal in main process
+    const resumeOptions = customOptions || await resolveSessionLaunchOptions(session, session.provider || 'claude');
+    if (!resumeOptions.provider) resumeOptions.provider = session.provider || 'claude';
+    if ((session.provider || 'claude') === 'pi' && session.filePath && !resumeOptions.filePath) {
+      resumeOptions.filePath = session.filePath;
+    }
+    const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
+    if (!result.ok) {
+      entry.terminal.write(`\r\nError: ${result.error}\r\n`);
+      entry.closed = true;
       return;
     }
-  }
+    if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
 
-  // Create new terminal entry (hidden until showSession)
-  const entry = createTerminalEntry(session);
-
-  // Open terminal in main process
-  const resumeOptions = customOptions || await resolveSessionLaunchOptions(session, session.provider || 'claude');
-  if (!resumeOptions.provider) resumeOptions.provider = session.provider || 'claude';
-  if ((session.provider || 'claude') === 'pi' && session.filePath && !resumeOptions.filePath) {
-    resumeOptions.filePath = session.filePath;
+    showSession(sessionId);
+    pollActiveSessions();
+  } finally {
+    openingSessionKeys.delete(openingKey);
   }
-  const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
-  if (!result.ok) {
-    entry.terminal.write(`\r\nError: ${result.error}\r\n`);
-    entry.closed = true;
-    return;
-  }
-  if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
-
-  showSession(sessionId);
-  pollActiveSessions();
 }
 
 async function waitForSessionStopped(sessionId, timeoutMs = 4000) {
@@ -860,28 +876,36 @@ async function waitForSessionStopped(sessionId, timeoutMs = 4000) {
 
 async function restartSessionWithOptions(session, options) {
   const sessionId = session.sessionId;
-  if (!confirm('Restart this session with the saved launch config?')) return;
+  const openingKey = `restart:${sessionId}`;
+  if (openingSessionKeys.has(openingKey)) return;
+  openingSessionKeys.add(openingKey);
 
-  if (activePtyIds.has(sessionId)) {
-    const result = await window.api.stopSession(sessionId);
-    if (!result?.ok && result?.error !== 'not running') {
-      alert('Could not stop session: ' + (result?.error || 'unknown error'));
-      return;
-    }
-    const stopped = await waitForSessionStopped(sessionId);
-    if (!stopped) {
-      alert('Timed out waiting for the session to stop.');
-      return;
-    }
-  }
+  try {
+    if (!confirm('Restart this session with the saved launch config?')) return;
 
-  activePtyIds.delete(sessionId);
-  if (openSessions.has(sessionId)) {
-    destroySession(sessionId);
+    if (activePtyIds.has(sessionId)) {
+      const result = await window.api.stopSession(sessionId);
+      if (!result?.ok && result?.error !== 'not running') {
+        alert('Could not stop session: ' + (result?.error || 'unknown error'));
+        return;
+      }
+      const stopped = await waitForSessionStopped(sessionId);
+      if (!stopped) {
+        alert('Timed out waiting for the session to stop.');
+        return;
+      }
+    }
+
+    activePtyIds.delete(sessionId);
+    if (openSessions.has(sessionId)) {
+      destroySession(sessionId);
+    }
+    await pollActiveSessions();
+    refreshSidebar();
+    openSession(session, options);
+  } finally {
+    openingSessionKeys.delete(openingKey);
   }
-  await pollActiveSessions();
-  refreshSidebar();
-  openSession(session, options);
 }
 
 // Handle window resize

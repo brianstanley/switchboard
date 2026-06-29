@@ -39,6 +39,20 @@ const SESSION_LAUNCH_CONFIG_KEYS = [
   'piSessionDir',
 ];
 
+function isEditableKeyTarget(target) {
+  if (!target || typeof target.closest !== 'function') return false;
+  return !!target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"]');
+}
+
+function shouldSubmitDialogOnEnter(e) {
+  return e.key === 'Enter'
+    && !e.shiftKey
+    && !e.ctrlKey
+    && !e.altKey
+    && !e.metaKey
+    && !isEditableKeyTarget(e.target);
+}
+
 function sessionLaunchConfigKey(sessionId) {
   return SESSION_LAUNCH_CONFIG_PREFIX + sessionId;
 }
@@ -682,7 +696,10 @@ async function showCodexSessionDialog(project, session) {
     refreshSidebar();
   }
 
+  let submitted = false;
   async function startOrResume() {
+    if (submitted) return;
+    submitted = true;
     const options = collectOptions();
     if (isResume) {
       await saveSessionLaunchConfig(session, options);
@@ -706,7 +723,10 @@ async function showCodexSessionDialog(project, session) {
 
   function onKey(e) {
     if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && !e.target.matches('input')) startOrResume();
+    if (shouldSubmitDialogOnEnter(e)) {
+      e.preventDefault();
+      startOrResume();
+    }
   }
   document.addEventListener('keydown', onKey);
 }
@@ -944,7 +964,10 @@ async function showPiSessionDialog(project, session) {
     refreshSidebar();
   }
 
+  let submitted = false;
   async function startOrResume() {
+    if (submitted) return;
+    submitted = true;
     const options = collectOptions();
     if (isResume) {
       await saveSessionLaunchConfig(session, options);
@@ -968,7 +991,10 @@ async function showPiSessionDialog(project, session) {
 
   function onKey(e) {
     if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && !e.target.matches('input')) startOrResume();
+    if (shouldSubmitDialogOnEnter(e)) {
+      e.preventDefault();
+      startOrResume();
+    }
   }
   document.addEventListener('keydown', onKey);
 }
@@ -1085,9 +1111,13 @@ async function showNewSessionDialog(project, providerId = 'claude') {
 
   function close() {
     overlay.remove();
+    document.removeEventListener('keydown', onKey);
   }
 
+  let submitted = false;
   function start() {
+    if (submitted) return;
+    submitted = true;
     const options = { provider: 'claude' };
     if (dangerousSkip) {
       options.dangerouslySkipPermissions = true;
@@ -1118,7 +1148,11 @@ async function showNewSessionDialog(project, providerId = 'claude') {
   // Keyboard support
   function onKey(e) {
     if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
-    if (e.key === 'Enter' && !e.target.matches('input')) { start(); document.removeEventListener('keydown', onKey); }
+    if (shouldSubmitDialogOnEnter(e)) {
+      e.preventDefault();
+      start();
+      document.removeEventListener('keydown', onKey);
+    }
   }
   document.addEventListener('keydown', onKey);
 }
@@ -1235,6 +1269,7 @@ async function showResumeSessionDialog(session) {
 
   function close() {
     overlay.remove();
+    document.removeEventListener('keydown', onKey);
   }
 
   function collectOptions() {
@@ -1263,7 +1298,10 @@ async function showResumeSessionDialog(session) {
     refreshSidebar();
   }
 
+  let submitted = false;
   async function resume() {
+    if (submitted) return;
+    submitted = true;
     const options = collectOptions();
     await saveSessionLaunchConfig(session, options);
     close();
@@ -1281,7 +1319,11 @@ async function showResumeSessionDialog(session) {
 
   function onKey(e) {
     if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
-    if (e.key === 'Enter' && !e.target.matches('input')) { resume(); document.removeEventListener('keydown', onKey); }
+    if (shouldSubmitDialogOnEnter(e)) {
+      e.preventDefault();
+      resume();
+      document.removeEventListener('keydown', onKey);
+    }
   }
   document.addEventListener('keydown', onKey);
 }
@@ -1352,7 +1394,10 @@ function showAddProjectDialog() {
 
   function onKey(e) {
     if (e.key === 'Escape') close();
-    if (e.key === 'Enter') addProject();
+    if (shouldSubmitDialogOnEnter(e)) {
+      e.preventDefault();
+      addProject();
+    }
   }
   document.addEventListener('keydown', onKey);
 }

@@ -1498,12 +1498,16 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       for (const m of oscMatches) {
         const code = m[1];
         const payload = m[2].slice(0, 120);
-        // Detect Claude CLI busy state from OSC 0 title (spinner chars = busy, ✳ = idle)
+        // Detect CLI busy state from OSC 0 title. Claude emits ✳ when idle;
+        // Codex often restores a normal title instead, so any non-spinner
+        // title after a spinner clears busy.
         if (code === '0') {
           const firstChar = payload.charAt(0);
-          const isBusy = firstChar.charCodeAt(0) >= 0x2800 && firstChar.charCodeAt(0) <= 0x28FF;
+          const firstCode = firstChar.charCodeAt(0);
+          const isBusy = firstCode >= 0x2800 && firstCode <= 0x28FF;
           const isIdle = firstChar === '\u2733'; // ✳
-          log.debug(`[OSC 0] session=${currentId} char=U+${firstChar.charCodeAt(0).toString(16).toUpperCase()} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
+          const charLabel = Number.isNaN(firstCode) ? 'EMPTY' : firstCode.toString(16).toUpperCase();
+          log.debug(`[OSC 0] session=${currentId} char=U+${charLabel} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
           if (isBusy && !session._cliBusy) {
             session._cliBusy = true;
             session._oscIdle = false;
@@ -1511,9 +1515,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('cli-busy-state', currentId, true);
             }
-          } else if (isIdle && session._cliBusy) {
+          } else if (!isBusy && session._cliBusy) {
             session._cliBusy = false;
-            session._oscIdle = true;
+            session._oscIdle = isIdle;
             log.debug(`[OSC 0] session=${currentId} → IDLE`);
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('cli-busy-state', currentId, false);
