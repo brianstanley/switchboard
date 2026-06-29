@@ -99,6 +99,57 @@ const MAX_BUFFER_SIZE = 256 * 1024;
 const activeSessions = new Map();
 let mainWindow = null;
 
+function stopActiveSessionForDelete(sessionId) {
+  for (const [activeId, session] of Array.from(activeSessions.entries())) {
+    const realId = session.realSessionId || activeId;
+    if (activeId !== sessionId && realId !== sessionId) continue;
+
+    if (!session.exited) {
+      try { session.pty.kill(); } catch {}
+      session.exited = true;
+    }
+    shutdownMcpServer(realId);
+    session.mcpServer = null;
+    activeSessions.delete(activeId);
+    activeSessions.delete(realId);
+  }
+}
+
+function deleteSessionHistory(sessionId, { notify = true, refreshProviders = true } = {}) {
+  const cached = getCachedSession(sessionId);
+  stopActiveSessionForDelete(sessionId);
+
+  try {
+    if (cached) {
+      const provider = cached.provider || 'claude';
+      if (provider === 'codex') {
+        const result = spawnSync('codex', ['delete', '--force', sessionId], {
+          encoding: 'utf8',
+          env: cleanPtyEnv,
+        });
+        if (result.error) return { ok: false, error: result.error.message, provider };
+        if (result.status !== 0) {
+          const msg = (result.stderr || result.stdout || `codex delete exited ${result.status}`).trim();
+          return { ok: false, error: msg, provider };
+        }
+      } else {
+        const jsonlPath = cached.filePath || path.join(PROJECTS_DIR, cached.folder, sessionId + '.jsonl');
+        fs.rmSync(jsonlPath, { force: true });
+      }
+    }
+
+    deleteCachedSession(sessionId);
+    deleteSearchSession(sessionId);
+    deleteSessionMeta(sessionId);
+    if (refreshProviders && cached?.provider === 'codex') refreshCodexSessions({ force: true });
+    if (refreshProviders && cached?.provider === 'pi') refreshPiSessions({ force: true });
+    if (notify) notifyRendererProjectsChanged();
+    return { ok: true, provider: cached?.provider || null };
+  } catch (err) {
+    return { ok: false, error: err.message, provider: cached?.provider || null };
+  }
+}
+
 function mergeDailyModelTokens(baseEntries = [], extraEntries = []) {
   const byDate = new Map();
 
@@ -412,6 +463,69 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
     return { ok: true };
   } catch (err) {
     return { error: err.message };
+  }
+});
+
+// --- IPC: delete-project ---
+ipcMain.handle('delete-project', (_event, projectPath) => {
+  try {
+    if (!projectPath || typeof projectPath !== 'string') {
+      return { ok: false, error: 'Missing project path' };
+    }
+
+    const cachedRows = getAllCached().filter(row => row.projectPath === projectPath);
+    const sessionIds = Array.from(new Set(cachedRows.map(row => row.sessionId).filter(Boolean)));
+    const folders = new Set(cachedRows.map(row => row.folder).filter(Boolean));
+    folders.add(encodeProjectPath(projectPath));
+
+    const errors = [];
+    const deletedSessionIds = [];
+    const touchedProviders = new Set();
+    for (const sessionId of sessionIds) {
+      const result = deleteSessionHistory(sessionId, { notify: false, refreshProviders: false });
+      if (result?.provider) touchedProviders.add(result.provider);
+      if (!result?.ok) {
+        errors.push(`${sessionId}: ${result?.error || 'unknown error'}`);
+      } else {
+        deletedSessionIds.push(sessionId);
+      }
+    }
+
+    if (errors.length > 0) {
+      notifyRendererProjectsChanged();
+      return {
+        ok: false,
+        deleted: deletedSessionIds.length,
+        deletedSessionIds,
+        errors,
+        error: errors[0],
+      };
+    }
+
+    for (const [sessionId, session] of Array.from(activeSessions.entries())) {
+      if (session.projectPath !== projectPath) continue;
+      deletedSessionIds.push(session.realSessionId || sessionId);
+      stopActiveSessionForDelete(session.realSessionId || sessionId);
+    }
+
+    const global = getSetting('global') || {};
+    const hidden = global.hiddenProjects || [];
+    if (!hidden.includes(projectPath)) hidden.push(projectPath);
+    global.hiddenProjects = hidden;
+    setSetting('global', global);
+
+    for (const folder of folders) {
+      deleteCachedFolder(folder);
+      deleteSearchFolder(folder);
+    }
+    deleteSetting('project:' + projectPath);
+
+    if (touchedProviders.has('codex')) refreshCodexSessions({ force: true });
+    if (touchedProviders.has('pi')) refreshPiSessions({ force: true });
+    notifyRendererProjectsChanged();
+    return { ok: true, deleted: deletedSessionIds.length, deletedSessionIds: Array.from(new Set(deletedSessionIds)) };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
 });
 
@@ -1181,44 +1295,7 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
 });
 
 ipcMain.handle('delete-session', (_event, sessionId) => {
-  const cached = getCachedSession(sessionId);
-  const running = activeSessions.get(sessionId);
-
-  if (running && !running.exited) {
-    try { running.pty.kill(); } catch {}
-    running.exited = true;
-    activeSessions.delete(sessionId);
-  }
-
-  try {
-    if (cached) {
-      const provider = cached.provider || 'claude';
-      if (provider === 'codex') {
-        const result = spawnSync('codex', ['delete', '--force', sessionId], {
-          encoding: 'utf8',
-          env: cleanPtyEnv,
-        });
-        if (result.error) return { ok: false, error: result.error.message };
-        if (result.status !== 0) {
-          const msg = (result.stderr || result.stdout || `codex delete exited ${result.status}`).trim();
-          return { ok: false, error: msg };
-        }
-      } else {
-        const jsonlPath = cached.filePath || path.join(PROJECTS_DIR, cached.folder, sessionId + '.jsonl');
-        fs.rmSync(jsonlPath, { force: true });
-      }
-    }
-
-    deleteCachedSession(sessionId);
-    deleteSearchSession(sessionId);
-    deleteSessionMeta(sessionId);
-    if (cached?.provider === 'codex') refreshCodexSessions({ force: true });
-    if (cached?.provider === 'pi') refreshPiSessions({ force: true });
-    notifyRendererProjectsChanged();
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  return deleteSessionHistory(sessionId);
 });
 
 // --- IPC: open-terminal ---

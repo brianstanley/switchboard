@@ -11,10 +11,18 @@
 // showSessionSkillsDialog, showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js)
 
 const deletingSessionIds = new Set();
+const deletingProjectPaths = new Set();
 const sessionSkillsCache = new Map();
 const SKILL_CACHE_TTL_MS = 30000;
+const CONFIRM_LABEL_MAX = 72;
 let draggingProjectPath = null;
 let suppressProjectHeaderClick = false;
+
+function confirmLabel(value, fallback = 'Untitled') {
+  const label = cleanDisplayName(value || fallback) || fallback;
+  if (label.length <= CONFIRM_LABEL_MAX) return label;
+  return label.slice(0, CONFIRM_LABEL_MAX - 3).trimEnd() + '...';
+}
 
 function setSessionDeleting(item, sessionId, deleting) {
   if (!item) return;
@@ -503,6 +511,12 @@ function renderProjects(projects, resort) {
     archiveGroupBtn.innerHTML = ICONS.archive(18);
     header.appendChild(archiveGroupBtn);
 
+    const deleteProjectBtn = document.createElement('button');
+    deleteProjectBtn.className = 'project-delete-btn';
+    deleteProjectBtn.title = 'Delete folder from Switchboard';
+    deleteProjectBtn.innerHTML = ICONS.trash(15);
+    header.appendChild(deleteProjectBtn);
+
     const newBtn = document.createElement('button');
     newBtn.className = 'project-new-btn';
     newBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
@@ -672,12 +686,55 @@ function rebindSidebarEvents(projects) {
         loadProjects();
       };
     }
+    const deleteProjectBtn = header.querySelector('.project-delete-btn');
+    if (deleteProjectBtn) {
+      deleteProjectBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (deletingProjectPaths.has(project.projectPath)) return;
+
+        const shortName = confirmLabel(project.projectPath.split('/').filter(Boolean).slice(-2).join('/') || project.projectPath, 'folder');
+        if (!confirm(`Delete folder "${shortName}" from Switchboard?\n\nThis permanently deletes the saved session history under it. Project files are not deleted.`)) return;
+
+        const group = header.closest('.project-group');
+        deletingProjectPaths.add(project.projectPath);
+        deleteProjectBtn.disabled = true;
+        header.setAttribute('aria-busy', 'true');
+        group?.classList.add('deleting');
+
+        try {
+          const result = await window.api.deleteProject(project.projectPath);
+          if (!result?.ok) {
+            alert('Could not delete folder: ' + (result?.error || 'unknown error'));
+            return;
+          }
+
+          const deletedIds = result.deletedSessionIds?.length
+            ? result.deletedSessionIds
+            : project.sessions.map(session => session.sessionId);
+          for (const sessionId of deletedIds) {
+            if (openSessions.has(sessionId)) destroySession(sessionId);
+            pendingSessions.delete(sessionId);
+            sessionMap.delete(sessionId);
+            activePtyIds.delete(sessionId);
+          }
+          await pollActiveSessions();
+          await loadProjects();
+        } catch (err) {
+          alert('Could not delete folder: ' + (err?.message || 'unknown error'));
+        } finally {
+          deletingProjectPaths.delete(project.projectPath);
+          deleteProjectBtn.disabled = false;
+          header.removeAttribute('aria-busy');
+          group?.classList.remove('deleting');
+        }
+      };
+    }
     header.onclick = (e) => {
       if (suppressProjectHeaderClick) {
         e.preventDefault();
         return;
       }
-      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn')) return;
+      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-delete-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn')) return;
       header.classList.toggle('collapsed');
     };
   }
@@ -850,8 +907,8 @@ function rebindSidebarEvents(projects) {
       deleteBtn.onclick = async (e) => {
         e.stopPropagation();
         if (deletingSessionIds.has(session.sessionId)) return;
-        const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary || session.sessionId);
-        if (!confirm(`Delete "${displayName}" from history?\n\nThis permanently deletes the saved session history.`)) return;
+        const displayName = confirmLabel(session.name || session.aiTitle || session.summary || session.sessionId, 'session');
+        if (!confirm(`Delete session "${displayName}"?\n\nThis permanently deletes the saved session history.`)) return;
 
         setSessionDeleting(item, session.sessionId, true);
 
@@ -990,7 +1047,7 @@ function buildSessionItem(session) {
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'session-delete-btn';
   deleteBtn.title = 'Delete from history';
-  deleteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>';
+  deleteBtn.innerHTML = ICONS.trash(14);
 
   const forkBtn = document.createElement('button');
   forkBtn.className = 'session-fork-btn';

@@ -467,6 +467,7 @@ body { display: flex; flex-direction: column; }
 }
 
 .project-archive-btn,
+.project-delete-btn,
 .project-new-btn {
   background: transparent;
   color: #808098;
@@ -484,8 +485,12 @@ body { display: flex; flex-direction: column; }
   opacity: 0.7;
 }
 
-.project-archive-btn {
+.project-archive-btn,
+.project-delete-btn {
   border: none;
+}
+
+.project-archive-btn {
   margin-left: -2px;
 }
 
@@ -496,11 +501,13 @@ body { display: flex; flex-direction: column; }
 }
 
 .project-archive-btn svg,
+.project-delete-btn svg,
 .project-new-btn svg {
   display: block;
 }
 
 .project-header:hover .project-archive-btn,
+.project-header:hover .project-delete-btn,
 .project-header:hover .project-new-btn,
 .project-header:hover .project-settings-btn {
   opacity: 1;
@@ -514,6 +521,21 @@ body { display: flex; flex-direction: column; }
 .project-archive-btn:hover {
   background: rgba(120,130,255,0.1);
   color: #8088ff;
+}
+
+.project-delete-btn:hover {
+  background: rgba(224,80,112,0.1);
+  color: #e05070;
+}
+
+.project-delete-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.project-group.deleting .project-sessions {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .project-header .arrow {
