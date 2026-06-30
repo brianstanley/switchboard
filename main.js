@@ -43,7 +43,7 @@ const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { getProvider, getProviderMeta } = require('./providers');
 const { adaptCodexRollout } = require('./codex-log-adapter');
-const { getCodexStats } = require('./codex-session-scanner');
+const { getCodexStats, scanCodexSessions, findNewCodexSession } = require('./codex-session-scanner');
 const { adaptPiSession } = require('./pi-log-adapter');
 const { listSessionSkills } = require('./skill-scanner');
 
@@ -98,6 +98,73 @@ const MAX_BUFFER_SIZE = 256 * 1024;
 // Active PTY sessions
 const activeSessions = new Map();
 let mainWindow = null;
+
+function activeRealSessionIds() {
+  const ids = new Set();
+  for (const [activeId, session] of activeSessions) {
+    ids.add(session.realSessionId || activeId);
+  }
+  return ids;
+}
+
+function snapshotCodexThreadIds(projectPath) {
+  try {
+    return new Set(
+      scanCodexSessions()
+        .filter(session => session.projectPath === projectPath)
+        .map(session => session.sessionId)
+    );
+  } catch (err) {
+    log.warn(`[codex-detect] snapshot failed: ${err.message}`);
+    return new Set();
+  }
+}
+
+function cleanupDefaultSessionMeta(sessionId) {
+  const meta = getMeta(sessionId);
+  if (meta && !meta.name && !meta.starred && !meta.archived) {
+    deleteSessionMeta(sessionId);
+  }
+}
+
+function detectCodexRealSession(tempId, session) {
+  if (!session || session.exited || session.provider !== 'codex' || session.realSessionId) return false;
+
+  const now = Date.now();
+  if (session._codexLastDetectAt && now - session._codexLastDetectAt < 1000) return false;
+  session._codexLastDetectAt = now;
+
+  let sessions;
+  try {
+    sessions = scanCodexSessions();
+  } catch (err) {
+    log.warn(`[codex-detect] scan failed: ${err.message}`);
+    return false;
+  }
+
+  const real = findNewCodexSession(sessions, {
+    projectPath: session.projectPath,
+    openedAt: session._openedAt,
+    knownThreadIds: session.knownCodexThreadIds,
+    activeThreadIds: activeRealSessionIds(),
+  });
+  if (!real || real.sessionId === tempId) return false;
+
+  session.realSessionId = real.sessionId;
+  activeSessions.delete(tempId);
+  activeSessions.set(real.sessionId, session);
+  cleanupDefaultSessionMeta(tempId);
+
+  log.info(`[codex-detect] ${tempId} -> ${real.sessionId}`);
+  try { refreshCodexSessions({ force: true }); } catch {}
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('session-detected', tempId, real.sessionId);
+    notifyRendererProjectsChanged();
+  }
+
+  return true;
+}
 
 function stopActiveSessionForDelete(sessionId) {
   for (const [activeId, session] of Array.from(activeSessions.entries())) {
@@ -1364,6 +1431,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   log.info(`[shell] profile=${shellProfile.id} shell=${shell} args=${JSON.stringify(shellExtraArgs)}`);
 
   let knownJsonlFiles = new Set();
+  let knownCodexThreadIds = new Set();
   let sessionSlug = null;
   let projectFolder = null;
 
@@ -1391,6 +1459,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }
       } catch {}
     }
+  }
+
+  if (!isPlainTerminal && providerId === 'codex' && isNew) {
+    knownCodexThreadIds = snapshotCodexThreadIds(projectPath);
   }
 
   let ptyProcess;
@@ -1482,6 +1554,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
     projectPath, firstResize: true,
     projectFolder, knownJsonlFiles, sessionSlug,
+    knownCodexThreadIds,
     provider: providerId,
     piSessionDir: providerId === 'pi' ? (effectiveProviderOptions?.piSessionDir || null) : null,
     isPlainTerminal, forkFrom: sessionOptions?.forkFrom || null,
@@ -1490,6 +1563,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   activeSessions.set(sessionId, session);
 
   ptyProcess.onData(data => {
+    if (session.provider === 'codex' && !session.realSessionId) {
+      detectCodexRealSession(sessionId, session);
+    }
     const currentId = session.realSessionId || sessionId;
 
     // Parse OSC sequences (title changes, progress, notifications, etc.)

@@ -227,32 +227,7 @@ window.api.onTerminalData((sessionId, data) => {
   trackActivity(sessionId, data);
 });
 
-window.api.onSessionDetected((tempId, realId) => {
-  const entry = openSessions.get(tempId);
-  if (!entry) return;
-
-  entry.session.sessionId = realId;
-  if (activeSessionId === tempId) setActiveSession(realId);
-
-  // Re-key in openSessions
-  openSessions.delete(tempId);
-  openSessions.set(realId, entry);
-
-  terminalHeaderId.textContent = realId;
-  terminalHeaderName.textContent = 'New session';
-
-  // Refresh sidebar to show the new session, then select it
-  loadProjects().then(() => {
-    const item = document.querySelector(`[data-session-id="${realId}"]`);
-    if (item) {
-      document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
-      item.classList.add('active');
-    }
-  });
-  pollActiveSessions();
-});
-
-window.api.onSessionForked((oldId, newId) => {
+function rekeyOpenSession(oldId, newId) {
   const entry = openSessions.get(oldId);
   if (!entry) return;
 
@@ -262,21 +237,24 @@ window.api.onSessionForked((oldId, newId) => {
   openSessions.delete(oldId);
   openSessions.set(newId, entry);
 
-  // Re-key file panel state for the new session ID
+  if (activePtyIds.delete(oldId)) activePtyIds.add(newId);
   if (typeof rekeyFilePanelState === 'function') rekeyFilePanelState(oldId, newId);
 
-  // Re-key pending session to newId so sidebar item persists until DB has real data
   const pendingEntry = pendingSessions.get(oldId);
   pendingSessions.delete(oldId);
   if (pendingEntry) {
     pendingEntry.sessionId = newId;
+    if (pendingEntry.session) pendingEntry.session.sessionId = newId;
     pendingSessions.set(newId, pendingEntry);
   }
+
   sessionMap.delete(oldId);
   sessionMap.set(newId, entry.session);
-
   terminalHeaderId.textContent = newId;
+  return entry;
+}
 
+function refreshAfterSessionRekey(newId) {
   loadProjects().then(() => {
     const item = document.querySelector(`[data-session-id="${newId}"]`);
     if (item) {
@@ -287,6 +265,18 @@ window.api.onSessionForked((oldId, newId) => {
     }
   });
   pollActiveSessions();
+}
+
+window.api.onSessionDetected((tempId, realId) => {
+  const entry = rekeyOpenSession(tempId, realId);
+  if (!entry) return;
+  refreshAfterSessionRekey(realId);
+});
+
+window.api.onSessionForked((oldId, newId) => {
+  const entry = rekeyOpenSession(oldId, newId);
+  if (!entry) return;
+  refreshAfterSessionRekey(newId);
 });
 
 window.api.onProcessExited((sessionId, exitCode) => {
